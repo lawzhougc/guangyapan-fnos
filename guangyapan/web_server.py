@@ -10,7 +10,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from .client import GuangyapanClient
 from .downloader import FileDownloader, fix_permissions, format_size, format_speed
 
-APP_VERSION = "1.0.6"
+APP_VERSION = "1.1.0"
 GITHUB_REPO_URL = "https://github.com/lawzhougc/guangyapan-fnos"
 _VERSION_CACHE = {"last_check": 0, "data": None}
 
@@ -214,9 +214,9 @@ HTML_PAGE = """<!DOCTYPE html>
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>光鸭网盘 · 飞牛私有云 (fnOS) 官方适配版</title>
-  <link rel="icon" type="image/x-icon" href="/favicon.ico?v=1.0.6">
-  <link rel="icon" type="image/png" sizes="32x32" href="/icon.png?v=1.0.6">
-  <link rel="apple-touch-icon" href="/icon.png?v=1.0.6">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico?v=1.1.0">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icon.png?v=1.1.0">
+  <link rel="apple-touch-icon" href="/icon.png?v=1.1.0">
   <script src="/qrcode.min.js"></script>
   <style>
     :root {
@@ -1964,7 +1964,7 @@ HTML_PAGE = """<!DOCTYPE html>
             <div class="setting-card">
               <div class="setting-card-title">ℹ️ 关于与更新检查</div>
               <div class="setting-card-desc">
-                当前运行版本: <strong id="aboutCurrentVersion" style="color: var(--brand);">v1.0.6</strong> · 由 <strong>chaos</strong> 专为飞牛 fnOS 深度适配打造。
+                当前运行版本: <strong id="aboutCurrentVersion" style="color: var(--brand);">v1.1.0</strong> · 由 <strong>chaos</strong> 专为飞牛 fnOS 深度适配打造。
               </div>
               <div style="background: var(--bg-input); padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); font-size: 12px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
@@ -2337,7 +2337,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <div class="modal" style="width: 460px; max-width: 95vw; overflow-y: auto;">
       <div class="modal-header">
         <div style="display: flex; align-items: center; gap: 8px;">
-          <img src="/icon.png?v=1.0.5" style="width: 26px; height: 26px; object-fit: contain; border-radius: 6px;">
+          <img src="/icon.png?v=1.1.0" style="width: 26px; height: 26px; object-fit: contain; border-radius: 6px;">
           <span>光鸭网盘 · 账号登录</span>
         </div>
         <button class="close-btn" onclick="closeLoginModal()">&times;</button>
