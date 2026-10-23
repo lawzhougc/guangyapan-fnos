@@ -124,6 +124,9 @@ HTML_PAGE = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>光鸭网盘 · 飞牛系统 (fnOS) 客户端</title>
   <link rel="icon" type="image/x-icon" href="/favicon.ico?v=1.0.4">
   <link rel="icon" type="image/png" sizes="32x32" href="/icon.png?v=1.0.4">
@@ -702,18 +705,27 @@ HTML_PAGE = """<!DOCTYPE html>
       bottom: 24px;
       right: 24px;
       background: #1e293b;
-      border: 1px solid var(--border);
+      border: 1px solid #334155;
       border-radius: 8px;
       padding: 12px 20px;
-      color: var(--text);
-      box-shadow: 0 10px 20px -3px rgba(0,0,0,0.6);
+      color: #f8fafc;
+      box-shadow: 0 10px 25px -3px rgba(0,0,0,0.5);
       transform: translateY(100px);
       opacity: 0;
       transition: all 0.25s ease;
       z-index: 9999;
       font-size: 13.5px;
+      font-weight: 500;
+      pointer-events: none;
     }
     #toast.show { transform: translateY(0); opacity: 1; }
+    body[data-theme="light"] #toast {
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      color: #0f172a !important;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+      font-weight: 600;
+    }
 
     /* Mobile Responsive Adaptation */
     .mobile-header-top { display: none; }
@@ -958,6 +970,16 @@ HTML_PAGE = """<!DOCTYPE html>
       }
       .mobile-badge.orange {
         background: var(--primary);
+      }
+      #toast {
+        left: 50% !important;
+        right: auto !important;
+        transform: translate(-50%, 100px) !important;
+        bottom: calc(68px + env(safe-area-inset-bottom, 0px)) !important;
+        white-space: nowrap !important;
+      }
+      #toast.show {
+        transform: translate(-50%, 0) !important;
       }
     }
 
@@ -1371,12 +1393,16 @@ HTML_PAGE = """<!DOCTYPE html>
         </div>
 
         <div style="font-size: 12.5px; color: var(--text-muted); text-align: center; line-height: 1.6; max-width: 320px;">
-          请使用手机 <b>光鸭网盘 APP</b> 或 <b>微信/系统相机</b> 扫码<br>
-          在手机端点击【确认登录】即可自动完成授权
+          请使用手机 <b>光鸭网盘 APP</b> 扫码确认登录<br>
+          <span style="font-size: 11.5px; color: var(--text-dim);">手机访问本页面可保存二维码图片，在光鸭 APP 扫一扫中选取相册图片进行登录</span>
         </div>
 
-        <div style="display: flex; gap: 10px; margin-top: 16px; width: 100%;">
-          <button class="btn-accent" style="flex: 1; justify-content: center;" id="mobileDirectAuthBtn" onclick="openMobileAuth()">📲 手机端一键确认登录</button>
+        <div style="font-size: 12px; color: var(--text-dim); margin-top: 8px;">
+          授权验证码: <code id="displayUserCode" style="font-weight: 600; color: var(--primary); cursor: pointer; padding: 2px 6px; background: var(--bg-hover); border-radius: 4px;" onclick="copyUserCode()" title="点击复制">--</code>
+        </div>
+
+        <div style="display: flex; gap: 10px; margin-top: 14px; width: 100%;">
+          <button class="btn-accent" style="flex: 1; justify-content: center;" id="saveQrBtn" onclick="saveQrCodeImage()">💾 保存二维码图片</button>
           <button class="btn-secondary" style="flex: 1; justify-content: center;" onclick="refreshDeviceCode()">🔄 刷新二维码</button>
         </div>
       </div>
@@ -1603,14 +1629,18 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     async function deleteFile(fileId, name) {
-      if (!confirm(`确定要删除 "${name}" 吗？`)) return;
+      if (!confirm(`确定要将 "${name}" 移入回收站吗？`)) return;
       try {
-        await fetch("/api/delete-file", {
+        const res = await fetch("/api/delete-file", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ fileId })
         });
-        showToast("已删除");
+        const d = await res.json();
+        if (!res.ok || d.error) {
+          throw new Error(d.error || `HTTP ${res.status}`);
+        }
+        showToast("已成功移入回收站");
         loadFiles();
       } catch (e) {
         alert("删除失败: " + e.message);
@@ -2265,6 +2295,10 @@ HTML_PAGE = """<!DOCTYPE html>
 
         currentDeviceCode = data.device_code;
         currentAuthUrl = data.verification_uri_complete || data.verification_url;
+        const userCodeEl = document.getElementById("displayUserCode");
+        if (userCodeEl) {
+          userCodeEl.innerText = data.user_code || "--";
+        }
 
         // Render QR Code using QRCode.js
         if (typeof QRCode !== "undefined") {
@@ -2277,7 +2311,7 @@ HTML_PAGE = """<!DOCTYPE html>
             correctLevel: QRCode.CorrectLevel.M
           });
         } else {
-          container.innerHTML = `<div style="text-align: center; color: #111; font-size: 11px; padding: 20px;">请点击下方手机端一键登录</div>`;
+          container.innerHTML = `<div style="text-align: center; color: #111; font-size: 11px; padding: 20px;">二维码渲染组件加载中...</div>`;
         }
 
         badge.className = "status-badge status-active";
@@ -2331,11 +2365,39 @@ HTML_PAGE = """<!DOCTYPE html>
       }
     }
 
-    function openMobileAuth() {
-      if (currentAuthUrl) {
-        window.open(currentAuthUrl, "_blank");
+    function saveQrCodeImage() {
+      const container = document.getElementById("qrCodeCanvas");
+      if (!container) return;
+      const canvas = container.querySelector("canvas");
+      let dataUrl = "";
+      if (canvas) {
+        dataUrl = canvas.toDataURL("image/png");
       } else {
-        alert("请先刷新生成二维码授权链接");
+        const img = container.querySelector("img");
+        if (img && img.src) dataUrl = img.src;
+      }
+      if (!dataUrl) {
+        showToast("二维码尚未生成，请稍候");
+        return;
+      }
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = "guangyapan_login_qr.png";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      showToast("已保存二维码图片，可在光鸭APP扫码中选取");
+    }
+
+    function copyUserCode() {
+      const el = document.getElementById("displayUserCode");
+      const code = el ? el.innerText.trim() : "";
+      if (code && code !== "--") {
+        navigator.clipboard.writeText(code).then(() => {
+          showToast("授权码已复制: " + code);
+        }).catch(() => {
+          showToast("复制失败");
+        });
       }
     }
 
@@ -2581,6 +2643,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.end_headers()
         self.wfile.write(body)
 

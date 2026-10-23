@@ -269,7 +269,25 @@ class GuangyapanClient:
         return self._post("/userres/v1/file/create_dir", body)
 
     def delete_file(self, file_id: str) -> Dict[str, Any]:
-        return self._post("/userres/v1/file/delete_file", {"fileId": file_id})
+        """
+        Delete file / move to recycle bin.
+        Tries /userres/v1/file/recycle_file first (standard netdisk deletion) then permanent delete_file.
+        Supports both single fileId and fileIds array formats for maximum compatibility.
+        """
+        last_err = None
+        for endpoint in ["/userres/v1/file/recycle_file", "/userres/v1/file/delete_file"]:
+            for payload in [
+                {"fileId": file_id, "fileIds": [file_id]},
+                {"fileId": file_id},
+                {"fileIds": [file_id]}
+            ]:
+                try:
+                    return self._post(endpoint, payload)
+                except Exception as e:
+                    last_err = e
+        if last_err:
+            raise last_err
+        return {}
 
     def rename_file(self, file_id: str, new_name: str) -> Dict[str, Any]:
         return self._post("/userres/v1/file/rename", {"fileId": file_id, "name": new_name})
