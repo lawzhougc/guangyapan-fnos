@@ -4,7 +4,7 @@
             "title": "光鸭网盘",
             "desc": "光鸭网盘 Web 管理端 (by chaos)",
             "icon": "images/icon_{0}.png",
-            "type": "url",
+            "type": "iframe",
             "protocol": "http",
             "port": "8998",
             "url": "/",

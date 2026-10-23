@@ -7,7 +7,7 @@ import sys
 import argparse
 
 BASE_DIR = r"d:\antigravity\guangyapan_fnos"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 def build_package(target_arch="x86_64"):
     is_arm = target_arch.lower() in ("arm", "arm64", "aarch64")
@@ -139,7 +139,7 @@ if __name__ == "__main__":
             "title": "光鸭网盘",
             "desc": "光鸭网盘 Web 管理端 (by chaos)",
             "icon": "images/icon_{0}.png",
-            "type": "url",
+            "type": "iframe",
             "protocol": "http",
             "port": "8998",
             "url": "/",
@@ -195,9 +195,9 @@ source="thirdparty"
 reloadui="yes"
 install_type="root"
 checkport="false"
-micro_app="false"
+micro_app="true"
 disable_authorization_path="true"
-changelog="{VERSION}: [{arch_tag.upper()} 架构 · chaos 适配版] 1. 1:1 深度复刻光鸭官方现代视觉体系（品牌色、72px 极简左侧导航轨、顶栏品牌标、官方呆萌鸭空状态）；2. 顶部原生分类标签（全部、最近、视频、图片、文档、音频、安装包）及实时搜索过滤；3. 深度打磨全部弹窗与组件细节，统一字体与按钮层级，规范内边距留白，彻底消除字符溢出与视窗抖动；4. 传输任务入口优化至左侧导航轨，并精确对齐首页与上传按钮水平中线；5. 全面适配夜间模式高对比度视觉；6. 兼容局域网 HTTP 非安全环境下的 CDN 极速直链复制"
+changelog="{VERSION}: [{arch_tag.upper()} 架构 · chaos 适配版] 1. 飞牛桌面端点击图标支持以原生弹出窗口 (Micro App 任务窗口) 运行，内嵌完整功能视图，支持窗口拖拽、缩放及最大化；2. 直接通过 NAS IP:8998 端口访问保留完整独立浏览器页面运行；3. 优化窗口自适应视窗布局与任务栏联动。"
 """
     with open(os.path.join(pkg_root, "manifest"), "w", encoding="utf-8", newline="\n") as f:
         f.write(manifest_content)
