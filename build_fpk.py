@@ -64,7 +64,7 @@ def build_package(target_arch="x86_64"):
         "refresh_token": "",
         "sub": "",
         "expires_at": 0,
-        "download_dir": "/vol1/1000/光鸭网盘",
+        "download_dir": "",
         "port": 8998,
         "use_aria2": True
     }
@@ -77,6 +77,7 @@ def build_package(target_arch="x86_64"):
 import sys
 import os
 import signal
+import glob
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
@@ -92,9 +93,12 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8998))
     config_path = os.path.join(BASE_DIR, "config.json")
     if not os.path.exists(config_path):
-        alt = "/vol1/@appdata/guangyapan/config.json"
-        if os.path.exists(alt):
-            config_path = alt
+        if os.path.exists("/var/apps/guangyapan/var/config.json"):
+            config_path = "/var/apps/guangyapan/var/config.json"
+        else:
+            candidates = glob.glob("/vol*/@appdata/guangyapan/config.json")
+            if candidates:
+                config_path = candidates[0]
     run_server(port=port, config_path=config_path)
 """
     with open(os.path.join(app_payload_dir, "main.py"), "w", encoding="utf-8", newline="\n") as f:
@@ -181,11 +185,11 @@ desktop_applaunchname="guangyapan.Application"
 service_port="8998"
 source="thirdparty"
 reloadui="yes"
-install_type="volume"
+install_type="root"
 checkport="false"
 micro_app="false"
-disable_authorization_path="false"
-changelog="1.0.4: [{arch_tag.upper()} 架构 · chaos 适配版] 优化日间模式下顶部操作栏与按钮（夜间模式切换、新建文件夹）字体颜色与视觉对比度，全面提升可读性"
+disable_authorization_path="true"
+changelog="1.0.4: [{arch_tag.upper()} 架构 · chaos 适配版] 动态自动发现所有存储卷与用户共享文件夹，完全兼容多盘位与非默认卷安装；适配全机型系统权限"
 """
     with open(os.path.join(pkg_root, "manifest"), "w", encoding="utf-8", newline="\n") as f:
         f.write(manifest_content)
@@ -193,7 +197,7 @@ changelog="1.0.4: [{arch_tag.upper()} 架构 · chaos 适配版] 优化日间模
     # config/privilege
     privilege_content = """{
     "defaults": {
-        "run-as": "package"
+        "run-as": "root"
     }
 }
 """
@@ -209,8 +213,27 @@ changelog="1.0.4: [{arch_tag.upper()} 架构 · chaos 适配版] 优化日间模
     cmd_main = """#!/bin/bash
 
 APP_PORT=8998
-DATA_DIR="/vol1/@appdata/guangyapan"
-TARGET_DIR="/vol1/@appcenter/guangyapan"
+
+# Dynamically resolve TARGET_DIR (app payload/scripts)
+if [ -n "$TRIM_APPDEST" ] && [ -d "$TRIM_APPDEST" ]; then
+    TARGET_DIR="$TRIM_APPDEST"
+elif [ -d "/var/apps/guangyapan/target" ]; then
+    TARGET_DIR="/var/apps/guangyapan/target"
+else
+    TARGET_DIR=$(ls -d /vol*/@appcenter/guangyapan 2>/dev/null | head -n 1)
+    [ -z "$TARGET_DIR" ] && TARGET_DIR="/vol1/@appcenter/guangyapan"
+fi
+
+# Dynamically resolve DATA_DIR (app runtime data/logs/pid)
+if [ -n "$TRIM_PKGVAR" ] && [ -d "$TRIM_PKGVAR" ]; then
+    DATA_DIR="$TRIM_PKGVAR"
+elif [ -d "/var/apps/guangyapan/var" ]; then
+    DATA_DIR="/var/apps/guangyapan/var"
+else
+    DATA_DIR=$(ls -d /vol*/@appdata/guangyapan 2>/dev/null | head -n 1)
+    [ -z "$DATA_DIR" ] && DATA_DIR="/vol1/@appdata/guangyapan"
+fi
+
 PID_FILE="${DATA_DIR}/app.pid"
 LOG_FILE="${DATA_DIR}/info.log"
 
@@ -276,8 +299,8 @@ stop_process() {
         kill -9 "$pid" 2>/dev/null
     fi
     pkill -9 -f "guangyapan.*main\\.py" 2>/dev/null || true
-    pkill -9 -f "/vol1/@appdata/guangyapan/main\\.py" 2>/dev/null || true
-    pkill -9 -f "/vol1/@appcenter/guangyapan/main\\.py" 2>/dev/null || true
+    pkill -9 -f "@appdata/guangyapan/main\\.py" 2>/dev/null || true
+    pkill -9 -f "@appcenter/guangyapan/main\\.py" 2>/dev/null || true
     pkill -u guangyapan -f main.py 2>/dev/null || true
     fuser -k "${APP_PORT}/tcp" 2>/dev/null || true
     rm -f "$PID_FILE"
@@ -313,34 +336,25 @@ esac
     callbacks = {
         "install_init": "#!/bin/bash\nexit 0\n",
         "install_callback": """#!/bin/bash
-if ! id guangyapan >/dev/null 2>&1; then
-    groupadd guangyapan 2>/dev/null || true
-    useradd -g 901 -G guangyapan -s /usr/sbin/nologin -d /home/guangyapan -M guangyapan 2>/dev/null || true
-fi
-chown -R guangyapan:guangyapan /var/apps/guangyapan /vol1/@appcenter/guangyapan /vol1/@appdata/guangyapan 2>/dev/null || true
 chmod -R 755 /var/apps/guangyapan/cmd /var/apps/guangyapan/ui 2>/dev/null || true
 exit 0
 """,
         "uninstall_init": """#!/bin/bash
 pkill -9 -f "guangyapan.*main\\.py" 2>/dev/null || true
-pkill -9 -f "/vol1/@appdata/guangyapan/main\\.py" 2>/dev/null || true
-pkill -9 -f "/vol1/@appcenter/guangyapan/main\\.py" 2>/dev/null || true
+pkill -9 -f "@appdata/guangyapan/main\\.py" 2>/dev/null || true
+pkill -9 -f "@appcenter/guangyapan/main\\.py" 2>/dev/null || true
 fuser -k 8998/tcp 2>/dev/null || true
-pkill -u guangyapan -f main.py 2>/dev/null || true
-systemctl stop guangyapan 2>/dev/null || true
 exit 0
 """,
         "uninstall_callback": "#!/bin/bash\nexit 0\n",
         "upgrade_init": """#!/bin/bash
 pkill -9 -f "guangyapan.*main\\.py" 2>/dev/null || true
-pkill -9 -f "/vol1/@appdata/guangyapan/main\\.py" 2>/dev/null || true
-pkill -9 -f "/vol1/@appcenter/guangyapan/main\\.py" 2>/dev/null || true
+pkill -9 -f "@appdata/guangyapan/main\\.py" 2>/dev/null || true
+pkill -9 -f "@appcenter/guangyapan/main\\.py" 2>/dev/null || true
 fuser -k 8998/tcp 2>/dev/null || true
-pkill -u guangyapan -f main.py 2>/dev/null || true
 exit 0
 """,
         "upgrade_callback": """#!/bin/bash
-chown -R guangyapan:guangyapan /var/apps/guangyapan /vol1/@appcenter/guangyapan /vol1/@appdata/guangyapan 2>/dev/null || true
 chmod -R 755 /var/apps/guangyapan/cmd /var/apps/guangyapan/ui 2>/dev/null || true
 exit 0
 """,

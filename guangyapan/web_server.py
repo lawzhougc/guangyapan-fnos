@@ -2,11 +2,91 @@ import os
 import json
 import time
 import re
+import glob
 import threading
 import urllib.parse
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from .client import GuangyapanClient
 from .downloader import FileDownloader, fix_permissions, format_size, format_speed
+
+def get_fnos_storage_volumes():
+    """Discover all mounted storage volumes on fnOS (e.g. /vol1, /vol2, /vol01)."""
+    volumes = []
+    # 1. Check /proc/mounts
+    try:
+        if os.path.exists("/proc/mounts"):
+            with open("/proc/mounts", "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        mp = parts[1]
+                        if re.match(r"^/vol[0-9]+$", mp) and mp not in volumes:
+                            volumes.append(mp)
+    except Exception:
+        pass
+
+    # 2. Filesystem glob /vol*
+    for v in range(0, 33):
+        for cand in [f"/vol{v}", f"/vol{v:02d}"]:
+            if os.path.isdir(cand) and cand not in volumes:
+                volumes.append(cand)
+
+    def _vol_key(x):
+        m = re.search(r"\d+", x)
+        return int(m.group(0)) if m else 0
+
+    volumes.sort(key=_vol_key)
+    return volumes
+
+def get_fnos_user_shares():
+    """Discover all user shared folders across all storage volumes."""
+    shares = []
+    vols = get_fnos_storage_volumes()
+    for v in vols:
+        v_name = os.path.basename(v)
+        try:
+            with os.scandir(v) as it:
+                for entry in it:
+                    if entry.is_dir(follow_symlinks=True) and entry.name.isdigit() and int(entry.name) >= 1000:
+                        uid_dir = entry.path
+                        try:
+                            with os.scandir(uid_dir) as uit:
+                                for s_entry in uit:
+                                    if s_entry.is_dir(follow_symlinks=True) and not s_entry.name.startswith((".", "@")):
+                                        shares.append({
+                                            "name": f"📁 {s_entry.name}  [{v_name}]",
+                                            "path": s_entry.path.replace("\\", "/"),
+                                            "is_share": True
+                                        })
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+    shares.sort(key=lambda x: x["name"].lower())
+    return shares
+
+def detect_default_download_dir(preferred=""):
+    """Dynamically determine the best default download directory on fnOS."""
+    if preferred and os.path.isdir(preferred):
+        return preferred.replace("\\", "/")
+
+    # Check detected user directories across volumes
+    vols = get_fnos_storage_volumes()
+    for v in vols:
+        try:
+            with os.scandir(v) as it:
+                for entry in it:
+                    if entry.is_dir(follow_symlinks=True) and entry.name.isdigit() and int(entry.name) >= 1000:
+                        candidate = os.path.join(entry.path, "光鸭网盘").replace("\\", "/")
+                        return candidate
+        except Exception:
+            pass
+
+    if vols:
+        return os.path.join(vols[0], "光鸭网盘").replace("\\", "/")
+
+    home = os.path.expanduser("~")
+    return os.path.join(home, "Downloads", "光鸭网盘").replace("\\", "/")
 
 class GuangyapanApp:
     def __init__(self, config_path="config.json"):
@@ -15,8 +95,9 @@ class GuangyapanApp:
         self.downloader = FileDownloader(use_aria2=True)
         # task_id -> task dict
         self.downloads = {}
-        # Default download dir
-        self.download_dir = self.client.config.get("download_dir", "/vol1/1000/光鸭网盘")
+        # Default download dir dynamically resolved
+        saved_dir = self.client.config.get("download_dir", "")
+        self.download_dir = detect_default_download_dir(saved_dir)
         try:
             os.makedirs(self.download_dir, exist_ok=True)
             fix_permissions(self.download_dir)
@@ -1251,7 +1332,7 @@ HTML_PAGE = """<!DOCTYPE html>
             <button class="btn-secondary" onclick="openFolderPicker(onDlConfirmFolderPicked)">📂 浏览目录</button>
           </div>
           <div style="font-size: 12px; color: var(--text-dim); margin-top: 6px;">
-            提示：可下载至 <code>/vol1/1000/</code> 下的任意个人共享文件夹（如 照片、电影、临时文件等）。
+            提示：可下载至 NAS 任意存储卷或共享文件夹（如 照片、电影、临时文件等）。
           </div>
         </div>
 
@@ -1283,9 +1364,8 @@ HTML_PAGE = """<!DOCTYPE html>
 
       <!-- Quick Shortcuts -->
       <div style="display: flex; gap: 6px; margin-bottom: 10px; overflow-x: auto; white-space: nowrap;">
-        <button class="btn-outline btn-sm" onclick="loadFolderPickerList('')">🏠 全部共享文件夹</button>
-        <button class="btn-outline btn-sm" onclick="loadFolderPickerList('/vol1/1000')">👤 默认主空间 (/vol1/1000)</button>
-        <button class="btn-outline btn-sm" onclick="loadFolderPickerList(defaultDownloadDir)">📦 当前预设目录</button>
+        <button class="btn-outline btn-sm" onclick="loadFolderPickerList('')">🏠 全部共享文件夹与存储卷</button>
+        <button class="btn-outline btn-sm" onclick="loadFolderPickerList(defaultDownloadDir)">📦 当前默认下载目录</button>
       </div>
 
       <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
@@ -1450,7 +1530,7 @@ HTML_PAGE = """<!DOCTYPE html>
     let currentTransferTab = "active";
     let offlineFilter = "all";
     let allOfflineTasks = [];
-    let defaultDownloadDir = "/vol1/1000/光鸭网盘";
+    let defaultDownloadDir = "";
 
     // Download modal state
     let pendingDownloadFileId = "";
@@ -1458,8 +1538,8 @@ HTML_PAGE = """<!DOCTYPE html>
 
     // Folder Picker state
     let folderPickerCallback = null;
-    let folderPickerPath = "/vol1/1000";
-    let folderPickerSelectedPath = "/vol1/1000";
+    let folderPickerPath = "";
+    let folderPickerSelectedPath = "";
 
     function showToast(msg) {
       const t = document.getElementById("toast");
@@ -1849,8 +1929,8 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     async function folderPickerMkdir() {
-      const targetDir = folderPickerPath || folderPickerSelectedPath || "/vol1/1000";
-      const name = prompt(`在 ${targetDir} 下新建文件夹名称：`);
+      const targetDir = folderPickerPath || folderPickerSelectedPath || defaultDownloadDir || "";
+      const name = prompt(`在 ${targetDir || '当前位置'} 下新建文件夹名称：`);
       if (!name || !name.trim()) return;
       const newPath = (targetDir.endsWith("/") ? targetDir : targetDir + "/") + name.trim();
       try {
@@ -1872,7 +1952,7 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     function confirmFolderPicker() {
-      const chosen = folderPickerSelectedPath || folderPickerPath || defaultDownloadDir || "/vol1/1000";
+      const chosen = folderPickerSelectedPath || folderPickerPath || defaultDownloadDir || "";
       if (folderPickerCallback) {
         folderPickerCallback(chosen);
       }
@@ -2725,9 +2805,9 @@ class RequestHandler(BaseHTTPRequestHandler):
             candidates = [
                 os.path.join(os.path.dirname(__file__), "qrcode.min.js"),
                 os.path.join(os.path.dirname(os.path.dirname(__file__)), "qrcode.min.js"),
-                "/vol1/@appdata/guangyapan/qrcode.min.js",
-                "/vol1/@appcenter/guangyapan/qrcode.min.js"
-            ]
+                "/var/apps/guangyapan/var/qrcode.min.js",
+                "/var/apps/guangyapan/target/qrcode.min.js"
+            ] + glob.glob("/vol*/@appdata/guangyapan/qrcode.min.js") + glob.glob("/vol*/@appcenter/guangyapan/qrcode.min.js")
             for cand in candidates:
                 if os.path.exists(cand):
                     try:
@@ -2751,10 +2831,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 os.path.join(os.path.dirname(os.path.dirname(__file__)), "icon-256.png"),
                 os.path.join(os.path.dirname(__file__), "icon.png"),
                 os.path.join(os.path.dirname(os.path.dirname(__file__)), "icon.png"),
-                "/vol1/@appdata/guangyapan/icon.png",
                 "/var/apps/guangyapan/ICON_256.PNG",
-                "/vol1/@appcenter/guangyapan/ui/images/icon_256.png"
-            ]
+                "/var/apps/guangyapan/icon.png",
+                "/var/apps/guangyapan/var/icon.png"
+            ] + glob.glob("/vol*/@appdata/guangyapan/icon.png") + glob.glob("/vol*/@appcenter/guangyapan/ui/images/icon_256.png")
             for cand in candidates:
                 if os.path.exists(cand):
                     try:
@@ -2776,10 +2856,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             candidates = [
                 os.path.join(os.path.dirname(__file__), "favicon.ico"),
                 os.path.join(os.path.dirname(os.path.dirname(__file__)), "favicon.ico"),
-                "/vol1/@appdata/guangyapan/favicon.ico",
+                "/var/apps/guangyapan/var/favicon.ico",
                 os.path.join(os.path.dirname(__file__), "icon-32.png"),
                 os.path.join(os.path.dirname(__file__), "icon.png")
-            ]
+            ] + glob.glob("/vol*/@appdata/guangyapan/favicon.ico")
             for cand in candidates:
                 if os.path.exists(cand):
                     try:
@@ -2844,38 +2924,30 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/fs/browse":
             target_path = query.get("path", [""])[0].strip()
-            # If path is empty, return all user shared folders and storage volumes
+            # If path is empty, return all user shared folders and storage volumes dynamically
             if not target_path:
                 folders = []
                 # 1. Collect all user shared folders across all storage volumes
-                shared_folders = []
-                for v in range(1, 9):
-                    user_dir = f"/vol{v}/1000"
-                    if os.path.exists(user_dir):
-                        try:
-                            with os.scandir(user_dir) as it:
-                                for entry in it:
-                                    if entry.is_dir(follow_symlinks=True) and not entry.name.startswith((".", "@")):
-                                        v_label = f"存储卷 {v}" if v > 1 else "默认存储空间"
-                                        shared_folders.append({
-                                            "name": f"{entry.name}  [{v_label}]",
-                                            "path": entry.path.replace("\\", "/"),
-                                            "is_share": True
-                                        })
-                        except Exception:
-                            pass
-                shared_folders.sort(key=lambda x: x["name"].lower())
+                shared_folders = get_fnos_user_shares()
                 folders.extend(shared_folders)
 
                 # 2. Add raw volume mounts
-                for v in range(1, 9):
-                    vpath = f"/vol{v}"
-                    if os.path.exists(vpath):
-                        folders.append({
-                            "name": f"💽 存储卷 {v} 完整根目录 ({vpath})",
-                            "path": vpath,
-                            "is_volume": True
-                        })
+                vols = get_fnos_storage_volumes()
+                for vpath in vols:
+                    v_name = os.path.basename(vpath)
+                    folders.append({
+                        "name": f"💽 存储卷根目录 ({vpath})",
+                        "path": vpath,
+                        "is_volume": True
+                    })
+
+                # Non-fnOS fallback (local test / container)
+                if not folders:
+                    home = os.path.expanduser("~").replace("\\", "/")
+                    folders.append({"name": f"🏠 用户主目录 ({home})", "path": home})
+                    if os.path.exists("/"):
+                        folders.append({"name": "根目录 (/)", "path": "/"})
+
                 self._send_json({"currentPath": "", "folders": folders})
                 return
 
@@ -2889,13 +2961,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                     for entry in it:
                         try:
                             if entry.is_dir(follow_symlinks=True):
-                                if entry.name.startswith("."):
+                                if entry.name.startswith((".", "@")):
                                     continue
                                 disp_name = entry.name
-                                if disp_name == "1000":
-                                    disp_name = "1000 (个人存储空间)"
-                                elif disp_name == "1001":
-                                    disp_name = "1001 (副账户空间)"
+                                if disp_name.isdigit() and int(disp_name) >= 1000:
+                                    disp_name = f"用户空间 ({disp_name})"
                                 folders.append({
                                     "name": disp_name,
                                     "path": entry.path.replace("\\", "/")
@@ -2907,6 +2977,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "currentPath": target_path.replace("\\", "/"),
                     "folders": folders
                 })
+            except PermissionError:
+                self._send_json({"error": f"无权限访问该目录: {target_path}", "folders": []}, 403)
             except Exception as e:
                 self._send_json({"error": str(e), "folders": []}, 500)
 

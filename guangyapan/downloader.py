@@ -8,11 +8,19 @@ import re
 from typing import Optional, Callable, Dict, Any
 
 def fix_permissions(path: str):
-    """Ensure fnOS primary user (1000:1001) and all apps have full read/write access."""
+    """Ensure fnOS user and all apps have full read/write access."""
     try:
         if os.path.exists(path):
             try:
-                os.chown(path, 1000, 1001)
+                # If path is inside /vol*/<uid>/..., match the owner uid if numeric
+                parts = path.replace("\\", "/").split("/")
+                for p in parts:
+                    if p.isdigit() and int(p) >= 1000:
+                        uid = int(p)
+                        os.chown(path, uid, uid)
+                        break
+                else:
+                    os.chown(path, 1000, 1001)
             except Exception:
                 pass
             try:
