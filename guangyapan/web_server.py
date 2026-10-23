@@ -538,6 +538,8 @@ HTML_PAGE = """<!DOCTYPE html>
       gap: 8px;
       cursor: pointer;
       text-decoration: none;
+      color: var(--text-main);
+      user-select: none;
     }
 
     .brand-duck-icon {
@@ -548,11 +550,12 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     .brand-txt-svg {
-      height: 20px;
+      height: 22px;
       width: auto;
+      color: var(--text-main);
     }
-    body[data-theme="dark"] .brand-txt-svg path[fill="#222222"] {
-      fill: #f0f0f0;
+    body[data-theme="dark"] .brand-txt-svg {
+      color: var(--text-main);
     }
 
     .fnos-badge {
@@ -1654,6 +1657,17 @@ HTML_PAGE = """<!DOCTYPE html>
         <span class="rail-badge" id="cloudTaskBadge" style="display: none;">0</span>
       </div>
 
+      <div class="rail-btn" id="navTransfers" onclick="switchView('transfers')" title="传输与下载任务">
+        <div class="rail-btn-icon">
+          <!-- Official Download / Transfer SVG -->
+          <svg width="20" height="20" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path fill="currentColor" d="M2.5 13.5a.75.75 0 0 0 0 1.5h13a.75.75 0 0 0 0-1.5zM9 2.25a.75.75 0 0 1 .75.75v6.44l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.22 2.22V3a.75.75 0 0 1 .75-.75"/>
+          </svg>
+        </div>
+        <span class="rail-btn-label">传输</span>
+        <span class="rail-badge" id="activeDlBadge" style="display: none;">0</span>
+      </div>
+
       <div class="rail-btn" id="navTrash" onclick="switchView('trash')" title="回收站">
         <div class="rail-btn-icon">
           <!-- Official TabbarRecycle SVG -->
@@ -1689,7 +1703,39 @@ HTML_PAGE = """<!DOCTYPE html>
     <header id="top-header">
       <div class="header-left">
         <div class="brand-full-logo" onclick="switchView('files')">
-          <img src="/brand_guangya_txt.svg" class="brand-txt-svg" alt="光鸭网盘">
+          <svg width="99" height="24" viewBox="0 0 99 24" fill="none" class="brand-txt-svg" xmlns="http://www.w3.org/2000/svg">
+            <g clip-path="url(#clip0_1034_332)">
+              <g clip-path="url(#clip1_1034_332)">
+                <path d="M-0.0168457 5.34375C-0.0168457 2.39248 2.37563 0 5.3269 0H18.6394C21.5907 0 23.9832 2.39248 23.9832 5.34375V18.6562C23.9832 21.6075 21.5907 24 18.6394 24H5.3269C2.37563 24 -0.0168457 21.6075 -0.0168457 18.6562V5.34375Z" fill="#FF6800"/>
+                <path d="M-0.0168457 5.34375C-0.0168457 2.39248 2.37563 0 5.3269 0H18.6394C21.5907 0 23.9832 2.39248 23.9832 5.34375V18.6562C23.9832 21.6075 21.5907 24 18.6394 24H5.3269C2.37563 24 -0.0168457 21.6075 -0.0168457 18.6562V5.34375Z" fill="url(#paint0_radial_1034_332)" fill-opacity="0.7"/>
+                <path d="M12.8693 9.34167C13.5502 9.34167 14.1021 9.89201 14.1021 10.5709C14.1021 11.2497 13.5502 11.8 12.8693 11.8C12.1885 11.8 11.6365 11.2497 11.6365 10.5709C11.6365 9.892 12.1885 9.34167 12.8693 9.34167Z" fill="white"/>
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M12.551 4.96826C15.5436 4.96826 18.1015 6.82383 19.1307 9.44397C19.1677 9.53817 19.258 9.6017 19.3594 9.6017H21.45C21.5425 9.6017 21.6174 9.67644 21.6174 9.76864C21.6174 9.9403 21.5989 10.0209 21.5637 10.182C21.5616 10.1915 21.5595 10.201 21.5573 10.2104C21.5551 10.2199 21.5529 10.2293 21.5506 10.2387C21.546 10.2575 21.5412 10.2762 21.5361 10.2948C21.5311 10.3134 21.5258 10.3319 21.5203 10.3503C21.5066 10.3963 21.4915 10.4418 21.475 10.4866C21.4717 10.4955 21.4684 10.5045 21.465 10.5134C21.4208 10.6292 21.3677 10.7406 21.3064 10.8468C21.3017 10.8549 21.297 10.8631 21.2922 10.8712C21.2778 10.8955 21.2629 10.9195 21.2477 10.9433C21.2324 10.967 21.2167 10.9904 21.2006 11.0136C21.1834 11.0384 21.1656 11.0628 21.1475 11.0869C21.1286 11.1119 21.1093 11.1365 21.0894 11.1607C21.0824 11.1692 21.0754 11.1778 21.0683 11.1862C21.0425 11.2168 21.0159 11.2468 20.9886 11.2761C20.963 11.3035 20.9368 11.3303 20.91 11.3564C20.8866 11.3791 20.8628 11.4013 20.8386 11.423C20.8101 11.4485 20.781 11.4734 20.7513 11.4975C20.7158 11.5263 20.6795 11.554 20.6424 11.5808C20.5311 11.6608 20.4126 11.7314 20.2879 11.7913C20.2794 11.7954 20.2708 11.7995 20.2622 11.8035C20.2043 11.8305 20.145 11.8551 20.0846 11.8774C20.0353 11.8955 19.9852 11.9122 19.9344 11.9271C19.8995 11.9373 19.8643 11.9468 19.8288 11.9555C19.7911 11.9646 19.753 11.9729 19.7147 11.9802C19.6816 11.9866 19.6482 11.9921 19.6146 11.9971C19.5686 12.0038 19.3398 12.0112 19.2694 12.0112H16.9258L16.9258 12.0119H17.2887C16.9668 12.0267 16.9229 12.3024 16.9076 12.443L16.9075 12.442C16.6843 16.1311 13.613 19.0542 9.85688 19.0542C6.03668 19.0542 2.92474 16.0304 2.79725 12.2524C2.79277 12.1195 2.90124 12.0112 3.03452 12.0112H5.10892C5.34231 11.9938 5.46583 11.8997 5.50121 11.5464V11.566C5.73158 7.88374 8.7998 4.96828 12.551 4.96826ZM12.551 7.66375C10.2239 7.66377 8.32256 9.48144 8.19728 11.7705C8.19002 11.9033 8.08268 12.0112 7.94941 12.0112H5.75052C5.55814 12.0252 5.51246 12.1732 5.50466 12.2776C5.64269 14.5546 7.53848 16.3587 9.85688 16.3587C12.184 16.3587 14.0853 14.541 14.2106 12.2519C14.2179 12.1192 14.3252 12.0112 14.4585 12.0112H16.5982C16.8366 11.9671 16.8961 11.7624 16.8946 11.6289C16.7005 9.40691 14.8299 7.66375 12.551 7.66375Z" fill="white"/>
+              </g>
+              <path d="M61.5828 4.8746H63.6372V9.98332C63.6372 11.2456 62.6143 12.2688 61.3525 12.2688H59.8741L59.6054 10.3867H61.3525C61.5751 10.3867 61.7557 10.2061 61.7557 9.98332V6.75674H58.799V13.1427H64.4435V16.9742C64.4435 18.7562 62.9995 20.2008 61.2181 20.2008H60.0086V18.3187H61.2181C61.9603 18.3187 62.562 17.7167 62.562 16.9742V15.0249H58.2615C57.5192 15.0249 56.9175 14.423 56.9175 13.6805V4.8746H59.1638L59.471 3.79907H61.8901L61.5828 4.8746Z" fill="currentColor"/>
+              <path fill-rule="evenodd" clip-rule="evenodd" d="M56.1112 13.3443C56.1112 14.6066 55.0883 15.6299 53.8265 15.6299H53.4905V20.1336H51.7434V15.6299H49.1227V4.47126H56.1112V13.3443ZM51.0043 13.7477H51.7434V10.9917H51.0043V13.7477ZM53.4905 13.7477H53.8265C54.0492 13.7477 54.2297 13.5671 54.2297 13.3443V10.9917H53.4905V13.7477ZM51.0043 9.24388H51.7434V6.35347H51.0043V9.24388ZM53.4905 9.24388H54.2297V6.35347H53.4905V9.24388Z" fill="currentColor"/>
+              <path d="M40.7232 10.2522H47.1068V12.4033H43.5454V15.6955C43.5454 16.8463 44.4781 17.7793 45.6285 17.7793H47.846L47.3122 20.0648H45.6285C43.2163 20.0648 41.2608 18.1086 41.2607 15.6955V12.4033H37.4236L37.3509 13.3559C37.1176 16.4135 35.1215 19.0577 32.2526 20.1288L31.4539 17.9874C33.4917 17.2266 34.9076 15.3482 35.0729 13.1819L35.1322 12.4033H31.786V10.2522H38.4385V3.86632H40.7232V10.2522Z" fill="currentColor"/>
+              <path d="M80.8395 11.5966H72.1407L68.9798 17.0734C68.7988 17.3871 69.0251 17.7792 69.3871 17.7793H77.643C78.0051 17.7793 78.2313 17.3872 78.0503 17.0735L76.5383 14.4535L78.5169 13.3107L80.029 15.9307C81.0893 17.7681 79.7638 20.0647 77.643 20.0648H69.3871C67.2663 20.0647 65.9408 17.7679 67.0012 15.9306L69.5026 11.5966H65.9219V9.44555H80.8395V11.5966Z" fill="currentColor"/>
+              <path fill-rule="evenodd" clip-rule="evenodd" d="M96.494 17.9124H98.445V20.0624H81.5588V17.9124H83.1061V14.2131H96.494V17.9124ZM85.2589 17.9124H86.739V16.3631H85.2589V17.9124ZM88.8918 17.9124H90.7756V16.3631H88.8918V17.9124ZM92.9284 17.9124H94.3412V16.3631H92.9284V17.9124Z" fill="currentColor"/>
+              <path d="M61.8229 17.512H55.5736V15.6299H61.8229V17.512Z" fill="currentColor"/>
+              <path fill-rule="evenodd" clip-rule="evenodd" d="M90.4873 5.2772H96.2922V9.17407H97.6377V11.324H95.9769C95.5955 12.3119 94.8848 13.1593 93.9375 13.7055L93.2647 14.0934L92.1883 12.2315L92.8611 11.8436C93.1036 11.7037 93.3175 11.5274 93.4976 11.324H90.3331L91.1792 13.6084H88.8459L87.9998 11.324H85.4785C85.2208 12.2134 84.7947 13.0919 84.0915 13.9981L82.3899 12.6812C82.7494 12.2179 83.0112 11.776 83.2021 11.324H82.2315V9.17407H83.6662C83.7226 8.38234 83.7116 7.47327 83.7116 6.35218V5.2772H88.0653L88.4882 3.79907H90.9101L90.4873 5.2772ZM85.8676 7.42717C85.8685 8.03041 85.8631 8.60986 85.8274 9.17407H88.7764L88.3536 7.69595H90.7756L91.1984 9.17407H94.1393V7.42717H85.8676Z" fill="currentColor"/>
+              <path d="M61.4197 9.84889H59.5382L59.2022 7.56342H61.0837L61.4197 9.84889Z" fill="currentColor"/>
+              <path d="M36.6242 9.44555H33.9363L32.3236 4.74018H35.0115L36.6242 9.44555Z" fill="currentColor"/>
+              <path d="M45.2253 9.44555H42.5374L44.2846 4.74018H46.9724L45.2253 9.44555Z" fill="currentColor"/>
+              <path d="M79.7644 6.89123H66.997V4.74018H79.7644V6.89123Z" fill="currentColor"/>
+            </g>
+            <defs>
+              <radialGradient id="paint0_radial_1034_332" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(20.116 0.445312) rotate(127.312) scale(18.2115)">
+                <stop stop-color="#FFC30E"/>
+                <stop offset="1" stop-color="#FFA70E" stop-opacity="0"/>
+              </radialGradient>
+              <clipPath id="clip0_1034_332">
+                <rect width="99" height="24" fill="white"/>
+              </clipPath>
+              <clipPath id="clip1_1034_332">
+                <rect width="24" height="24" fill="white" transform="translate(-0.0168457)"/>
+              </clipPath>
+            </defs>
+          </svg>
           <span class="fnos-badge">fnOS</span>
         </div>
       </div>
@@ -1739,14 +1785,6 @@ HTML_PAGE = """<!DOCTYPE html>
             </div>
           </div>
         </div>
-
-        <!-- Transfers / Download Button in Header -->
-        <button class="btn-icon" id="topTransfersBtn" onclick="switchView('transfers')" title="传输与下载任务" style="position: relative;">
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path fill="currentColor" d="M2.5 13.5a.75.75 0 0 0 0 1.5h13a.75.75 0 0 0 0-1.5zM9 2.25a.75.75 0 0 1 .75.75v6.44l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.22 2.22V3a.75.75 0 0 1 .75-.75"/>
-          </svg>
-          <span class="rail-badge" id="activeDlBadge" style="display: none; top: -3px; right: -5px; min-width: 14px; height: 14px; font-size: 9px; padding: 0 3px;">0</span>
-        </button>
 
         <!-- Refresh Button -->
         <button class="btn-icon" onclick="refreshCurrentView()" title="刷新当前页面">
@@ -2457,7 +2495,7 @@ HTML_PAGE = """<!DOCTYPE html>
         document.getElementById("view-files")?.classList.add("active");
         updateBreadcrumbs();
       } else if (viewName === 'transfers') {
-        document.getElementById("topTransfersBtn")?.classList.add("active");
+        document.getElementById("navTransfers")?.classList.add("active");
         document.getElementById("view-transfers")?.classList.add("active");
         document.getElementById("breadcrumbs").innerHTML = `<span class="crumb-item current">⬇️ 本地下载与传输任务</span>`;
         loadTransfers();
@@ -3010,11 +3048,13 @@ function escapeHtml(str) {
       document.getElementById("countDoneDl").innerText = doneList.length;
 
       const badge = document.getElementById("activeDlBadge");
-      if (activeList.length > 0) {
-        badge.style.display = "inline-block";
-        badge.innerText = activeList.length;
-      } else {
-        badge.style.display = "none";
+      if (badge) {
+        if (activeList.length > 0) {
+          badge.style.display = "inline-flex";
+          badge.innerText = activeList.length;
+        } else {
+          badge.style.display = "none";
+        }
       }
 
       const displayList = (currentTransferTab === 'active') ? activeList : doneList;
