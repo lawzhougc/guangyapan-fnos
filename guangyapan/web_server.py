@@ -59,7 +59,7 @@ def get_fnos_user_shares():
                                 for s_entry in uit:
                                     if s_entry.is_dir(follow_symlinks=True) and not s_entry.name.startswith((".", "@")):
                                         shares.append({
-                                            "name": f"📁 {s_entry.name}  [{v_name}]",
+                                            "name": f"{s_entry.name}  [{v_name}]",
                                             "path": s_entry.path.replace("\\", "/"),
                                             "is_share": True
                                         })
@@ -264,6 +264,11 @@ HTML_PAGE = """<!DOCTYPE html>
       --radius-md: 12px;
       --radius-lg: 16px;
       --radius-full: 9999px;
+
+      /* Variable Aliases */
+      --primary: var(--brand);
+      --text: var(--text-main);
+      --text-dim: var(--text-muted);
     }
 
     body[data-theme="dark"] {
@@ -293,13 +298,37 @@ HTML_PAGE = """<!DOCTYPE html>
       --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
       --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
       --shadow-brand: 0 4px 12px rgba(255, 104, 0, 0.3);
+
+      /* Variable Aliases */
+      --primary: var(--brand);
+      --text: var(--text-main);
+      --text-dim: var(--text-muted);
+    }
+
+    *,
+    *::before,
+    *::after,
+    html,
+    body,
+    input,
+    textarea,
+    button,
+    select,
+    table,
+    th,
+    td,
+    div,
+    span,
+    p,
+    a,
+    label {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif !important;
     }
 
     * {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     }
 
     body {
@@ -453,7 +482,12 @@ HTML_PAGE = """<!DOCTYPE html>
       align-items: center;
       justify-content: center;
       cursor: pointer;
-      font-size: 15px;
+      font-size: 16px;
+      line-height: 1;
+      padding: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      user-select: none;
       transition: all 0.2s;
     }
     .rail-theme-btn:hover {
@@ -749,11 +783,18 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     /* Button Styles */
-    .btn-primary {
+    button {
+      font-family: inherit;
+      white-space: nowrap;
+      user-select: none;
+      box-sizing: border-box;
+    }
+
+    .btn-primary, .btn-guangya-orange {
       background: var(--brand);
-      color: #ffffff;
-      border: none;
-      border-radius: var(--radius-md);
+      color: #ffffff !important;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
       height: 36px;
       padding: 0 16px;
       font-size: 13px;
@@ -761,25 +802,26 @@ HTML_PAGE = """<!DOCTYPE html>
       cursor: pointer;
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 6px;
       box-shadow: var(--shadow-brand);
       transition: all 0.18s;
       white-space: nowrap;
     }
-    .btn-primary:hover {
+    .btn-primary:hover, .btn-guangya-orange:hover {
       background: var(--brand-hover);
       transform: translateY(-1px);
     }
-    .btn-primary:active {
+    .btn-primary:active, .btn-guangya-orange:active {
       background: var(--brand-active);
       transform: translateY(0);
     }
 
     .btn-secondary {
       background: var(--btn-secondary-bg);
-      color: var(--text-main);
+      color: var(--text-main) !important;
       border: 1px solid var(--border);
-      border-radius: var(--radius-md);
+      border-radius: var(--radius-sm);
       height: 36px;
       padding: 0 14px;
       font-size: 13px;
@@ -787,33 +829,37 @@ HTML_PAGE = """<!DOCTYPE html>
       cursor: pointer;
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 6px;
       transition: all 0.18s;
       white-space: nowrap;
     }
     .btn-secondary:hover {
       background: var(--btn-secondary-hover);
-      color: var(--brand);
+      color: var(--brand) !important;
       border-color: var(--brand-alpha-25);
     }
 
     .btn-outline {
       background: transparent;
-      color: var(--text-regular);
+      color: var(--text-regular) !important;
       border: 1px solid var(--border);
-      border-radius: var(--radius-md);
+      border-radius: var(--radius-sm);
       height: 36px;
       padding: 0 12px;
       font-size: 13px;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 6px;
       transition: all 0.18s;
+      white-space: nowrap;
     }
     .btn-outline:hover {
       background: var(--bg-hover);
-      color: var(--brand);
+      color: var(--brand) !important;
+      border-color: var(--brand-alpha-25);
     }
 
     .btn-icon {
@@ -841,20 +887,34 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     .btn-sm {
-      height: 28px;
-      padding: 0 10px;
-      font-size: 12px;
-      border-radius: var(--radius-sm);
+      height: 28px !important;
+      padding: 0 10px !important;
+      font-size: 12px !important;
+      border-radius: 6px !important;
+      line-height: 26px !important;
+      white-space: nowrap !important;
     }
 
     .btn-danger {
       background: #fee2e2;
-      color: #ef4444;
+      color: #ef4444 !important;
       border: 1px solid rgba(239, 68, 68, 0.2);
+      border-radius: var(--radius-sm);
+      height: 36px;
+      padding: 0 14px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.18s;
+      white-space: nowrap;
     }
     .btn-danger:hover {
       background: #ef4444;
-      color: #ffffff;
+      color: #ffffff !important;
     }
 
     /* Search Box */
@@ -988,8 +1048,12 @@ HTML_PAGE = """<!DOCTYPE html>
     .actions-cell {
       display: flex;
       align-items: center;
+      justify-content: flex-end;
       gap: 6px;
       opacity: 0.85;
+      white-space: nowrap;
+      flex-wrap: nowrap;
+      min-width: 170px;
       transition: opacity 0.15s;
     }
     tbody tr:hover .actions-cell {
@@ -1255,6 +1319,201 @@ HTML_PAGE = """<!DOCTYPE html>
       border-color: var(--brand);
       background: var(--bg-card);
       box-shadow: 0 0 0 3px var(--brand-alpha-15);
+    }
+
+    /* Form Inputs & Textarea */
+    input[type="text"],
+    input[type="password"],
+    input[type="search"],
+    textarea,
+    select {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text-main);
+      padding: 8px 12px;
+      font-size: 13px;
+      outline: none;
+      box-sizing: border-box;
+      transition: all 0.2s;
+    }
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--brand);
+      background: var(--bg-card);
+      box-shadow: 0 0 0 3px var(--brand-alpha-15);
+    }
+
+    /* Modal Close Button */
+    .close-btn {
+      background: transparent;
+      border: none;
+      font-size: 20px;
+      color: var(--text-muted);
+      cursor: pointer;
+      line-height: 1;
+      padding: 4px;
+      border-radius: 4px;
+      transition: all 0.15s;
+    }
+    .close-btn:hover {
+      color: var(--text-main);
+      background: var(--bg-hover);
+    }
+
+    /* Dropzone for torrent & upload */
+    .dropzone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius-md);
+      background: var(--bg-input);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.2s;
+    }
+    .dropzone:hover {
+      border-color: var(--brand);
+      background: var(--bg-hover);
+    }
+
+    /* Cloud Add Step 2 File Row */
+    .cloud-file-row {
+      display: grid;
+      grid-template-columns: 1fr 65px 85px;
+      align-items: center;
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--border-subtle);
+      cursor: pointer;
+      transition: background 0.15s;
+      font-size: 13px;
+    }
+    .cloud-file-row:hover {
+      background: var(--bg-hover);
+    }
+
+    /* Cloud Destination Folder Pill */
+    .cloud-dest-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 6px 12px;
+      font-size: 13px;
+      color: var(--text-main);
+      cursor: pointer;
+      max-width: 380px;
+      transition: all 0.18s;
+    }
+    .cloud-dest-pill:hover {
+      border-color: var(--brand);
+      background: var(--bg-hover);
+    }
+
+    /* Cloud Drive Destination Folder Tree */
+    .cloud-tree-container {
+      min-height: 220px;
+      max-height: 320px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg-card);
+      padding: 6px;
+    }
+    .cloud-tree-node {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--text-regular);
+      transition: background 0.15s;
+      user-select: none;
+    }
+    .cloud-tree-node:hover {
+      background: var(--bg-hover);
+      color: var(--text-main);
+    }
+    .cloud-tree-node.selected {
+      background: var(--brand-alpha-8);
+      color: var(--brand);
+      font-weight: 600;
+    }
+    .cloud-tree-arrow {
+      width: 14px;
+      font-size: 10px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+    .cloud-tree-icon {
+      font-size: 15px;
+      flex-shrink: 0;
+    }
+    .cloud-tree-name {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .cloud-tree-check {
+      color: var(--brand);
+      font-weight: 700;
+      font-size: 13px;
+      margin-left: auto;
+    }
+    .cloud-tree-tag-default {
+      font-size: 10px;
+      background: var(--brand-alpha-15);
+      color: var(--brand);
+      border: 1px solid var(--brand-alpha-25);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-weight: 600;
+    }
+
+    /* NAS Folder Picker List */
+    .fs-browser-list {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg-card);
+      overflow-y: auto;
+      padding: 4px;
+    }
+    .fs-folder-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--text-regular);
+      transition: background 0.15s;
+      margin-bottom: 2px;
+    }
+    .fs-folder-item:hover {
+      background: var(--bg-hover);
+      color: var(--text-main);
+    }
+    .fs-folder-item.selected {
+      background: var(--brand-alpha-8);
+      color: var(--brand);
+      border: 1px solid var(--brand-alpha-25);
+      font-weight: 600;
+    }
+    .fs-folder-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
     /* Toast */
@@ -1738,14 +1997,14 @@ HTML_PAGE = """<!DOCTYPE html>
 
       <!-- Quick Shortcuts -->
       <div style="display: flex; gap: 6px; margin-bottom: 10px; overflow-x: auto; white-space: nowrap;">
-        <button class="btn-outline btn-sm" onclick="loadFolderPickerList('')">🏠 全部共享文件夹与存储卷</button>
-        <button class="btn-outline btn-sm" onclick="loadFolderPickerList(defaultDownloadDir)">📦 当前默认下载目录</button>
+        <button class="btn-secondary btn-sm" onclick="loadFolderPickerList('')">🏠 全部共享文件夹与存储卷</button>
+        <button class="btn-secondary btn-sm" onclick="loadFolderPickerList(defaultDownloadDir)">📦 当前默认下载目录</button>
       </div>
 
       <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
         <input type="text" id="folderPickerCurrentPath" readonly style="flex: 1; font-family: monospace; font-size: 12.5px;" placeholder="当前选定路径...">
-        <button class="btn-outline btn-sm" onclick="folderPickerGoUp()">⬆️ 上一级</button>
-        <button class="btn-secondary btn-sm" onclick="folderPickerMkdir()">➕ 新建子文件夹</button>
+        <button class="btn-secondary btn-sm" onclick="folderPickerGoUp()">⬆️ 上一级</button>
+        <button class="btn-primary btn-sm" onclick="folderPickerMkdir()">➕ 新建子文件夹</button>
       </div>
 
       <div class="fs-browser-list" id="folderPickerList" style="min-height: 200px; max-height: 340px;">
@@ -1780,28 +2039,30 @@ HTML_PAGE = """<!DOCTYPE html>
 
       <!-- Step 1: Input Magnet / URL or Torrent -->
       <div id="cloudAddStep1">
-        <div class="subtabs" style="margin-bottom: 14px;">
-          <div class="subtabs-left">
-            <button class="subtab-btn active" id="tabMagnetBtn" onclick="switchCloudTab('magnet')">磁力 / HTTP 链接</button>
-            <button class="subtab-btn" id="tabTorrentBtn" onclick="switchCloudTab('torrent')">BT 种子文件 (.torrent)</button>
+        <div class="subtabs" style="margin-bottom: 16px; padding: 0;">
+          <div class="subtabs-left" style="width: 100%;">
+            <button class="subtab-btn active" id="tabMagnetBtn" onclick="switchCloudTab('magnet')" style="flex: 1; text-align: center;">磁力 / HTTP 链接</button>
+            <button class="subtab-btn" id="tabTorrentBtn" onclick="switchCloudTab('torrent')" style="flex: 1; text-align: center;">BT 种子文件 (.torrent)</button>
           </div>
         </div>
 
-        <div id="magnetSection">
-          <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 8px;">输入 magnet:?xt=urn:btih: 磁力链接或下载网址：</p>
-          <textarea id="magnetInput" rows="5" placeholder="magnet:?xt=urn:btih:..."></textarea>
+        <div id="magnetSection" style="height: 180px; display: flex; flex-direction: column;">
+          <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;">输入 magnet:?xt=urn:btih: 磁力链接或 HTTP 下载直链：</p>
+          <textarea id="magnetInput" style="flex: 1; width: 100%; box-sizing: border-box; resize: none; padding: 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text-main); font-size: 13px; line-height: 1.5; outline: none;" placeholder="magnet:?xt=urn:btih:... 或 http://... / https://..."></textarea>
         </div>
 
-        <div id="torrentSection" style="display: none;">
-          <div class="dropzone" onclick="document.getElementById('torrentFileInput').click()">
-            <p id="torrentFileName">点击选择或拖拽 .torrent 种子文件至此处</p>
+        <div id="torrentSection" style="height: 180px; display: none; flex-direction: column;">
+          <div class="dropzone" onclick="document.getElementById('torrentFileInput').click()" style="flex: 1; width: 100%; box-sizing: border-box; border: 2px dashed var(--border); border-radius: 12px; background: var(--bg-input); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; cursor: pointer; transition: all 0.2s;">
+            <span style="font-size: 32px;">📑</span>
+            <p id="torrentFileName" style="font-size: 13px; color: var(--text-main); font-weight: 500; margin: 0;">点击选择或拖拽 .torrent 种子文件至此处</p>
+            <span style="font-size: 11.5px; color: var(--text-muted);">支持单个 BT 种子解析，快速提交至光鸭云端</span>
             <input type="file" id="torrentFileInput" accept=".torrent" style="display: none;" onchange="handleTorrentSelect(this)">
           </div>
         </div>
 
         <div class="modal-footer" style="margin-top: 18px; display: flex; justify-content: flex-end; gap: 10px;">
           <button class="btn-secondary" onclick="closeModal('cloudAddModal')">取消</button>
-          <button class="btn-guangya-orange" id="cloudAddNextBtn" onclick="resolveCloudAdd()">下一步：解析任务 ➔</button>
+          <button class="btn-primary" id="cloudAddNextBtn" onclick="resolveCloudAdd()">下一步：解析任务 ➔</button>
         </div>
       </div>
 
@@ -1866,7 +2127,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
           <div style="display: flex; align-items: center; gap: 10px; margin-left: auto;">
             <button class="btn-secondary" onclick="backToCloudAddStep1()" style="padding: 9px 14px; font-size: 13px;">⬅️ 返回修改</button>
-            <button class="btn-guangya-orange" id="confirmCloudAddBtn" onclick="confirmSubmitCloudAdd()">立即添加</button>
+            <button class="btn-primary" id="confirmCloudAddBtn" onclick="confirmSubmitCloudAdd()">立即添加</button>
           </div>
         </div>
       </div>
@@ -1908,8 +2169,9 @@ HTML_PAGE = """<!DOCTYPE html>
         </button>
         <div style="display: flex; gap: 10px;">
           <button type="button" class="btn-secondary" onclick="closeModal('cloudFolderPickerModal')" style="padding: 8px 20px; font-size: 13px; border-radius: 8px;">取消</button>
-          <button type="button" class="btn-guangya-orange" onclick="confirmCloudFolderTreeSelection()" style="padding: 8px 24px; font-size: 13px; border-radius: 8px; font-weight: 600;">确定</button>
+          <button type="button" class="btn-primary" onclick="confirmCloudFolderTreeSelection()" style="padding: 8px 24px; font-size: 13px; border-radius: 8px; font-weight: 600;">确定</button>
         </div>
+      </div>
       </div>
     </div>
   </div>
@@ -2074,46 +2336,16 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
   </div>
 
-  <div id="toast"></div>
-
-  
-
-  <!-- Modal: Video Streaming Player (In-browser streaming) -->
-  <div class="modal-backdrop" id="videoPlayerModal" style="display: none;">
-    <div class="modal video-player-modal" style="width: 860px; max-width: 95vw; background: #000; border: 1px solid var(--border);">
-      <div class="modal-header" style="background: rgba(20,20,20,0.95); border-bottom: 1px solid #333; padding: 12px 18px;">
-        <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
-          <span style="font-size: 16px;">🎬</span>
-          <span class="modal-title" id="videoPlayerTitle" style="color: #fff; font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">视频播放</span>
-        </div>
-        <button class="btn-icon" onclick="closeVideoPlayer()" style="color: #bbb;">✕</button>
-      </div>
-      <div class="modal-body" style="padding: 0; background: #000; display: flex; align-items: center; justify-content: center; position: relative;">
-        <video id="videoPlayerElement" controls autoplay style="width: 100%; max-height: 75vh; outline: none; background: #000; display: block;"></video>
-      </div>
-      <div class="modal-footer" style="background: rgba(20,20,20,0.95); border-top: 1px solid #333; padding: 10px 18px; display: flex; justify-content: space-between; align-items: center;">
-        <div style="font-size: 12px; color: #888;">
-          💡 支持画中画、倍速及全屏播放 · CDN 极速直链串流
-        </div>
-        <div style="display: flex; gap: 10px;">
-          <button class="btn-primary btn-sm" id="videoDownloadDirectBtn" onclick="downloadCurrentVideo()">⬇️ 下载到 NAS</button>
-          <button class="btn-secondary btn-sm" onclick="closeVideoPlayer()">关闭</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <!-- Toast Component -->
   <div id="toast"></div>
 
   <script>
 
-    // ================= Category Filtering & Video Player =================
+    // ================= Category Filtering & Navigation =================
     let currentRawFiles = [];
     let activeCategory = 'all';
     let searchQuery = '';
     let currentViewMode = 'list';
-    let currentPlayingFile = null;
 
     const VIDEO_EXTS = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'ts', 'm4v', 'rmvb', 'iso'];
     const IMG_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'heic'];
@@ -2145,47 +2377,6 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById('viewModeListBtn')?.classList.toggle('active', mode === 'list');
       document.getElementById('viewModeGridBtn')?.classList.toggle('active', mode === 'grid');
       renderFileList();
-    }
-
-    async function playVideo(fileId, fileName) {
-      currentPlayingFile = { fileId, fileName };
-      showToast("正在解析视频直链...");
-      try {
-        const res = await fetch(`/api/download-url?fileId=${encodeURIComponent(fileId)}`);
-        const json = await res.json();
-        if (!json.url) {
-          showToast("获取播放直链失败: " + (json.msg || "未知错误"));
-          return;
-        }
-        const modal = document.getElementById("videoPlayerModal");
-        const video = document.getElementById("videoPlayerElement");
-        const title = document.getElementById("videoPlayerTitle");
-        title.innerText = fileName;
-        video.src = json.url;
-        video.currentTime = 0;
-        modal.style.display = "flex";
-        video.play().catch(() => {});
-      } catch (e) {
-        showToast("播放出错: " + e.message);
-      }
-    }
-
-    function closeVideoPlayer() {
-      const modal = document.getElementById("videoPlayerModal");
-      const video = document.getElementById("videoPlayerElement");
-      if (video) {
-        video.pause();
-        video.src = "";
-      }
-      if (modal) {
-        modal.style.display = "none";
-      }
-    }
-
-    function downloadCurrentVideo() {
-      if (currentPlayingFile) {
-        promptStartDownload(currentPlayingFile.fileId, currentPlayingFile.fileName);
-      }
     }
 
     function toggleSelectAllTableFiles(checked) {
@@ -2330,7 +2521,6 @@ HTML_PAGE = """<!DOCTYPE html>
             card.onmouseleave = () => card.style.borderColor = 'var(--border)';
             card.onclick = () => {
               if (isDir) navigateTo(item.fileId, item.fileName);
-              else if (isVid) playVideo(item.fileId, item.fileName);
               else promptStartDownload(item.fileId, item.fileName);
             };
             card.innerHTML = `
@@ -2352,24 +2542,22 @@ HTML_PAGE = """<!DOCTYPE html>
       filtered.forEach(item => {
         const tr = document.createElement("tr");
         const isDir = (item.resType === 2);
-        const isVid = isVideoFile(item.fileName);
         const icon = isDir ? "📁" : getFileIcon(item.fileName);
 
         tr.innerHTML = `
           <td><input type="checkbox" class="table-file-cb" data-fileid="${item.fileId}"></td>
           <td>
-            <div class="file-name-cell" onclick="${isDir ? `navigateTo('${item.fileId}', '${escapeHtml(item.fileName)}')` : (isVid ? `playVideo('${item.fileId}', '${escapeHtml(item.fileName)}')` : `promptStartDownload('${item.fileId}', '${escapeHtml(item.fileName)}')`)}">
+            <div class="file-name-cell" onclick="${isDir ? `navigateTo('${item.fileId}', '${escapeHtml(item.fileName)}')` : `promptStartDownload('${item.fileId}', '${escapeHtml(item.fileName)}')`}">
               <span class="file-icon">${icon}</span>
               <span class="file-name-text" title="${escapeHtml(item.fileName)}">${escapeHtml(item.fileName)}</span>
             </div>
           </td>
           <td>${isDir ? '--' : formatBytes(item.fileSize)}</td>
           <td>${formatDate(item.utime || item.ctime)}</td>
-          <td>
-            <div class="actions-cell" style="justify-content: flex-end;">
-              ${!isDir && isVid ? `<button class="btn-secondary btn-sm" onclick="playVideo('${item.fileId}', '${escapeHtml(item.fileName)}')">▶️ 播放</button>` : ''}
+          <td style="text-align: right; width: 220px; white-space: nowrap;">
+            <div class="actions-cell">
               ${!isDir ? `<button class="btn-primary btn-sm" onclick="promptStartDownload('${item.fileId}', '${escapeHtml(item.fileName)}')">⬇️<span class="desktop-text"> 下载到NAS</span><span class="mobile-text"> 下载</span></button>` : ''}
-              ${!isDir ? `<button class="btn-outline btn-sm desktop-only-btn" onclick="copyLink('${item.fileId}')">🔗 直链</button>` : ''}
+              ${!isDir ? `<button class="btn-secondary btn-sm desktop-only-btn" onclick="copyLink('${item.fileId}')">🔗 直链</button>` : ''}
               <button class="btn-danger btn-sm" onclick="deleteFile('${item.fileId}', '${escapeHtml(item.fileName)}')">🗑️</button>
             </div>
           </td>
@@ -2669,7 +2857,7 @@ function escapeHtml(str) {
               </div>
               <div style="margin-top: 14px; display: flex; gap: 8px; justify-content: center;">
                 <button class="btn-primary btn-sm" style="padding: 6px 16px;" onclick="confirmFolderPicker()">✅ 确定选择该目录</button>
-                <button class="btn-outline btn-sm" style="padding: 6px 16px;" onclick="folderPickerGoUp()">⬆️ 返回上一级</button>
+                <button class="btn-secondary btn-sm" style="padding: 6px 16px;" onclick="folderPickerGoUp()">⬆️ 返回上一级</button>
               </div>
             </div>
           `;
@@ -2680,16 +2868,17 @@ function escapeHtml(str) {
         folders.forEach(f => {
           const div = document.createElement("div");
           const isSelected = (f.path === folderPickerSelectedPath);
+          const cleanName = (f.name || "").replace(/^📁\\s*/, "");
           div.className = "fs-folder-item" + (isSelected ? " selected" : "");
           div.dataset.path = f.path;
           div.innerHTML = `
             <div class="fs-folder-left" style="flex: 1; min-width: 0;" onclick="selectFolderPickerItem('${escapeHtml(f.path)}')">
               <span style="font-size: 16px; flex-shrink: 0;">📁</span>
-              <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: ${f.is_share ? '600' : '400'};" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
+              <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: ${f.is_share ? '600' : '400'};" title="${escapeHtml(cleanName)}">${escapeHtml(cleanName)}</span>
             </div>
             <div style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
               <button class="btn-primary btn-sm" style="padding: 3px 8px; font-size: 11.5px;" onclick="event.stopPropagation(); selectFolderPickerItem('${escapeHtml(f.path)}'); confirmFolderPicker();">选择</button>
-              <button class="btn-outline btn-sm" style="padding: 3px 8px; font-size: 11.5px;" onclick="event.stopPropagation(); loadFolderPickerList('${escapeHtml(f.path)}')">进入 ➔</button>
+              <button class="btn-secondary btn-sm" style="padding: 3px 8px; font-size: 11.5px;" onclick="event.stopPropagation(); loadFolderPickerList('${escapeHtml(f.path)}')">进入 ➔</button>
             </div>
           `;
           div.ondblclick = () => {
@@ -3277,13 +3466,13 @@ function escapeHtml(str) {
       if (tab === 'magnet') {
         document.getElementById("tabMagnetBtn").classList.add("active");
         document.getElementById("tabTorrentBtn").classList.remove("active");
-        document.getElementById("magnetSection").style.display = "block";
+        document.getElementById("magnetSection").style.display = "flex";
         document.getElementById("torrentSection").style.display = "none";
       } else {
         document.getElementById("tabMagnetBtn").classList.remove("active");
         document.getElementById("tabTorrentBtn").classList.add("active");
         document.getElementById("magnetSection").style.display = "none";
-        document.getElementById("torrentSection").style.display = "block";
+        document.getElementById("torrentSection").style.display = "flex";
       }
     }
 
@@ -3415,10 +3604,10 @@ function escapeHtml(str) {
             <div style="display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden;">
               <input type="checkbox" class="cloud-file-cb" data-index="${f.fileIndex}" data-size="${f.fileSize || 0}" data-ext="${ext}" data-video="${isVideo ? '1' : '0'}" ${f.selected ? 'checked' : ''} style="cursor: pointer; width: 16px; height: 16px; accent-color: #ff6600; flex-shrink: 0;">
               ${iconHtml}
-              <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-size: 13px;" title="${escapeHtml(f.fileName)}">${escapeHtml(f.fileName)}</span>
+              <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-main); font-size: 13px; min-width: 0;" title="${escapeHtml(f.fileName)}">${escapeHtml(f.fileName)}</span>
             </div>
-            <div style="text-align: center; color: var(--text-dim); font-size: 12px; font-family: monospace;">${escapeHtml(ext || '-')}</div>
-            <div style="text-align: right; color: var(--text-dim); font-size: 12.5px; font-family: monospace;">${escapeHtml(f.formattedSize || formatBytes(f.fileSize || 0))}</div>
+            <div style="text-align: center; color: var(--text-muted); font-size: 12px; font-family: monospace; white-space: nowrap;">${escapeHtml(ext || '-')}</div>
+            <div style="text-align: right; color: var(--text-muted); font-size: 12.5px; font-family: monospace; white-space: nowrap;">${escapeHtml(f.formattedSize || formatBytes(f.fileSize || 0))}</div>
           `;
 
           row.onclick = (e) => {
@@ -4082,11 +4271,11 @@ function escapeHtml(str) {
       const btn = document.getElementById("themeToggleBtn");
       if (btn) {
         if (theme === "light") {
-          btn.innerHTML = "🌙 夜间";
-          btn.title = "当前为日间模式，点击切换为夜间模式";
+          btn.innerHTML = "🌙";
+          btn.title = "切换为夜间模式";
         } else {
-          btn.innerHTML = "☀️ 日间";
-          btn.title = "当前为夜间模式，点击切换为日间模式";
+          btn.innerHTML = "☀️";
+          btn.title = "切换为日间模式";
         }
       }
       const mBtn = document.getElementById("mobileThemeBtn");
