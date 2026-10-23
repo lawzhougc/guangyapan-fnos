@@ -1,0 +1,4 @@
+#!/bin/bash
+pkill -u guangyapan -f main.py 2>/dev/null || true
+systemctl stop guangyapan 2>/dev/null || true
+exit 0

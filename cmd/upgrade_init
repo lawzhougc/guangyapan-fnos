@@ -1,0 +1,3 @@
+#!/bin/bash
+pkill -u guangyapan -f main.py 2>/dev/null || true
+exit 0

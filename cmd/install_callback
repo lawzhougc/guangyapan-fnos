@@ -1,0 +1,9 @@
+#!/bin/bash
+# Ensure package user & group exist
+if ! id guangyapan >/dev/null 2>&1; then
+    groupadd guangyapan 2>/dev/null || true
+    useradd -g 901 -G guangyapan -s /usr/sbin/nologin -d /home/guangyapan -M guangyapan 2>/dev/null || true
+fi
+chown -R guangyapan:guangyapan /var/apps/guangyapan /vol1/@appcenter/guangyapan /vol1/@appdata/guangyapan 2>/dev/null || true
+chmod -R 755 /var/apps/guangyapan/cmd /var/apps/guangyapan/ui 2>/dev/null || true
+exit 0

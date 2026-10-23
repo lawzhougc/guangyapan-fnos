@@ -1,0 +1,96 @@
+#!/bin/bash
+
+APP_PORT=8998
+DATA_DIR="/vol1/@appdata/guangyapan"
+TARGET_DIR="/vol1/@appcenter/guangyapan"
+PID_FILE="${DATA_DIR}/app.pid"
+LOG_FILE="${DATA_DIR}/info.log"
+
+check_port_listening() {
+    local port=$1
+    python3 -c "import socket; s = socket.socket(); s.settimeout(1); exit(s.connect_ex(('127.0.0.1', ${port})))" 2>/dev/null
+}
+
+find_pid() {
+    cat "$PID_FILE" 2>/dev/null
+}
+
+status() {
+    if check_port_listening "$APP_PORT"; then
+        echo "服务正在运行 (端口: ${APP_PORT})"
+        exit 0
+    else
+        echo "服务未运行"
+        exit 3
+    fi
+}
+
+start_process() {
+    if check_port_listening "$APP_PORT"; then
+        echo "已有实例在运行 (端口: ${APP_PORT})"
+        exit 0
+    fi
+
+    mkdir -p "$DATA_DIR"
+    
+    # Prefer launching from TARGET_DIR or DATA_DIR
+    local run_script="${TARGET_DIR}/main.py"
+    if [ ! -f "$run_script" ]; then
+        run_script="${DATA_DIR}/main.py"
+    fi
+
+    cd "$DATA_DIR" || exit 1
+    nohup /usr/bin/python3 "$run_script" >> "${LOG_FILE}" 2>&1 &
+    local new_pid=$!
+    echo "$new_pid" > "$PID_FILE"
+
+    for i in $(seq 1 15); do
+        if check_port_listening "$APP_PORT"; then
+            echo "服务启动成功 (PID: ${new_pid})"
+            exit 0
+        fi
+        sleep 1
+    done
+
+    if check_port_listening "$APP_PORT"; then
+        echo "服务启动成功"
+        exit 0
+    fi
+
+    echo "服务启动失败"
+    exit 1
+}
+
+stop_process() {
+    local pid=$(find_pid)
+    if [ -n "$pid" ]; then
+        kill -TERM "$pid" 2>/dev/null
+        sleep 1
+        kill -9 "$pid" 2>/dev/null
+    fi
+    pkill -u guangyapan -f main.py 2>/dev/null || true
+    rm -f "$PID_FILE"
+    echo "服务已停止"
+    exit 0
+}
+
+case "$1" in
+    start)
+        start_process
+        ;;
+    stop)
+        stop_process
+        ;;
+    status)
+        status
+        ;;
+    restart)
+        stop_process
+        sleep 1
+        start_process
+        ;;
+    *)
+        echo "用法: $0 {start|stop|status|restart}"
+        exit 1
+        ;;
+esac

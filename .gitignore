@@ -1,0 +1,55 @@
+# Ignore root level scripts
+/*.py
+!/main.py
+!/cli.py
+!/build_fpk.py
+
+# Ignore scratch shell / batch / powershell scripts
+/*.sh
+/*.bat
+/*.ps1
+/*.mjs
+/*.service
+
+# Logs & PIDs
+*.log
+*.pid
+*.sock
+
+# Sensitive configurations
+config.json
+!config.example.json
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Build artifacts & package files
+build_fpk_tmp/
+*.fpk
+extracted/
+extracted_official/
+*.tar
+*.tgz
+*.gz
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Loose icons in root (keep primary icon.png)
+/icon-*.png
+/icon_*.png
+/guangyapan_real_icon_256.png
+!/icon.png
+/temp_*
+/tmp_*
+*.txt

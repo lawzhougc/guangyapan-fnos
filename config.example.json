@@ -1,0 +1,9 @@
+{
+  "access_token": "",
+  "refresh_token": "",
+  "sub": "",
+  "expires_at": 0,
+  "download_dir": "/vol1/1000/光鸭网盘",
+  "port": 8998,
+  "use_aria2": true
+}
