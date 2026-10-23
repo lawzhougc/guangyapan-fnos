@@ -10,7 +10,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from .client import GuangyapanClient
 from .downloader import FileDownloader, fix_permissions, format_size, format_speed
 
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 GITHUB_REPO_URL = "https://github.com/lawzhougc/guangyapan-fnos"
 _VERSION_CACHE = {"last_check": 0, "data": None}
 
@@ -213,1291 +213,1481 @@ HTML_PAGE = """<!DOCTYPE html>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <title>光鸭网盘 · 飞牛系统 (fnOS) 客户端</title>
-  <link rel="icon" type="image/x-icon" href="/favicon.ico?v=1.0.5">
-  <link rel="icon" type="image/png" sizes="32x32" href="/icon.png?v=1.0.5">
-  <link rel="apple-touch-icon" href="/icon.png?v=1.0.5">
+  <title>光鸭网盘 · 飞牛私有云 (fnOS) 官方适配版</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico?v=1.0.6">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icon.png?v=1.0.6">
+  <link rel="apple-touch-icon" href="/icon.png?v=1.0.6">
   <script src="/qrcode.min.js"></script>
   <style>
     :root {
-      --bg-body: #0b0f19;
-      --bg-sidebar: #070a12;
-      --bg-card: #151e2e;
-      --bg-hover: #1e293b;
-      --bg-subtle: #111827;
-      --bg-input: #0b0f19;
-      --bg-footer: #04060a;
-      --border: #263349;
-      --border-subtle: #1a2436;
-      --primary: #f59e0b;
-      --primary-hover: #d97706;
-      --accent: #3b82f6;
-      --accent-hover: #2563eb;
-      --success: #10b981;
-      --danger: #ef4444;
-      --warning: #f59e0b;
-      --text: #f8fafc;
-      --text-muted: #94a3b8;
-      --text-dim: #64748b;
-      --table-th-bg: #111827;
-      --table-hover: #1c273a;
-      --progress-bg: #0f172a;
-      --brand-icon-bg: #f59e0b20;
-      --brand-badge-bg: #3b82f625;
-    }
-    body[data-theme="light"] {
-      --bg-body: #f3f4f6;
-      --bg-sidebar: #ffffff;
-      --bg-card: #ffffff;
-      --bg-hover: #f1f5f9;
-      --bg-subtle: #f8fafc;
-      --bg-input: #f8fafc;
-      --bg-footer: #f8fafc;
-      --border: #cbd5e1;
-      --border-subtle: #e2e8f0;
-      --primary: #f59e0b;
-      --primary-hover: #d97706;
-      --accent: #2563eb;
-      --accent-hover: #1d4ed8;
-      --success: #10b981;
-      --danger: #ef4444;
-      --warning: #f59e0b;
-      --text: #0f172a;
-      --text-muted: #475569;
-      --text-dim: #64748b;
-      --table-th-bg: #f8fafc;
-      --table-hover: #f1f5f9;
-      --progress-bg: #e2e8f0;
-      --brand-icon-bg: #fef3c7;
-      --brand-badge-bg: #dbeafe;
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif; }
-    body { background: var(--bg-body); color: var(--text); height: 100vh; overflow: hidden; display: flex; }
+      /* Official Guangyapan Brand Colors */
+      --brand: #ff6800;
+      --brand-hover: #f06200;
+      --brand-active: #ea4e00;
+      --brand-alpha-3: rgba(255, 104, 0, 0.03);
+      --brand-alpha-8: rgba(255, 104, 0, 0.08);
+      --brand-alpha-15: rgba(255, 104, 0, 0.15);
+      --brand-alpha-25: rgba(255, 104, 0, 0.25);
+      --vip-gold: #f59e0b;
+      --vip-gradient: linear-gradient(135deg, #ffd043 0%, #ff6800 100%);
 
-    /* Layout */
-    #sidebar {
-      width: 230px;
-      background: var(--bg-sidebar);
+      /* Light Theme (Official Default) */
+      --bg-body: #f6f6f6;
+      --bg-header: #ffffff;
+      --bg-rail: #ffffff;
+      --bg-card: #ffffff;
+      --bg-subtle: #f9f9f9;
+      --bg-hover: #f5f7fc;
+      --bg-active: #fff6ec;
+      --bg-input: #f3f3f3;
+      --border: #e5e6eb;
+      --border-subtle: #f0f0f2;
+      --border-focus: #ff6800;
+
+      --text-main: #222222;
+      --text-regular: #444444;
+      --text-secondary: #666666;
+      --text-muted: #888888;
+      --text-placeholder: #999999;
+      --text-white: #ffffff;
+
+      --btn-secondary-bg: #f3f3f3;
+      --btn-secondary-hover: #e8e8e8;
+
+      --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.04);
+      --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.06);
+      --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.10);
+      --shadow-brand: 0 4px 12px rgba(255, 104, 0, 0.25);
+
+      --radius-xs: 4px;
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 16px;
+      --radius-full: 9999px;
+    }
+
+    body[data-theme="dark"] {
+      --bg-body: #141414;
+      --bg-header: #1c1c1c;
+      --bg-rail: #1c1c1c;
+      --bg-card: #202020;
+      --bg-subtle: #252525;
+      --bg-hover: #2a2a2a;
+      --bg-active: #2a2018;
+      --bg-input: #2a2a2a;
+      --border: #333333;
+      --border-subtle: #292929;
+      --border-focus: #ff6800;
+
+      --text-main: #f3f4f6;
+      --text-regular: #e5e7eb;
+      --text-secondary: #9ca3af;
+      --text-muted: #6b7280;
+      --text-placeholder: #4b5563;
+      --text-white: #ffffff;
+
+      --btn-secondary-bg: #2a2a2a;
+      --btn-secondary-hover: #333333;
+
+      --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+      --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+      --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+      --shadow-brand: 0 4px 12px rgba(255, 104, 0, 0.3);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+
+    body {
+      background: var(--bg-body);
+      color: var(--text-main);
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+    }
+
+    /* Overall Layout */
+    #app-container {
+      display: flex;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Left Navigation Rail (72px) */
+    #nav-rail {
+      width: 72px;
+      background: var(--bg-rail);
       border-right: 1px solid var(--border);
       display: flex;
       flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 0 16px 0;
       user-select: none;
+      z-index: 100;
       flex-shrink: 0;
-    }
-    .brand-box {
-      padding: 18px 20px;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      border-bottom: 1px solid var(--border);
-    }
-    .brand-icon {
-      width: 34px;
-      height: 34px;
-      border-radius: 8px;
-      object-fit: contain;
-      flex-shrink: 0;
-    }
-    .brand-name {
-      font-size: 16px;
-      font-weight: 700;
-      color: var(--text);
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    .brand-badge {
-      font-size: 11px;
-      background: #3b82f625;
-      color: #60a5fa;
-      border: 1px solid #3b82f640;
-      padding: 1px 6px;
-      border-radius: 4px;
+      transition: background 0.2s, border-color 0.2s;
     }
 
-    /* Nav menu */
-    .nav-list {
-      flex: 1;
-      padding: 16px 12px;
+    .rail-top {
       display: flex;
       flex-direction: column;
-      gap: 6px;
-      overflow-y: auto;
-    }
-    .nav-item {
-      display: flex;
       align-items: center;
-      justify-content: space-between;
-      padding: 10px 14px;
-      border-radius: 8px;
-      font-size: 14px;
-      font-weight: 500;
-      color: var(--text-muted);
-      cursor: pointer;
-      transition: all 0.15s ease;
-    }
-    .nav-item:hover {
-      background: var(--bg-hover);
-      color: var(--text);
-    }
-    .nav-item.active {
-      background: #f59e0b18;
-      color: var(--primary);
-      font-weight: 600;
-    }
-    .nav-item-left {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    .nav-badge {
-      background: var(--accent);
-      color: #fff;
-      font-size: 11px;
-      padding: 1px 7px;
-      border-radius: 10px;
-      font-weight: 600;
-    }
-    .nav-badge.orange {
-      background: var(--primary);
-    }
-
-    /* Sidebar Footer / User info */
-    .sidebar-footer {
-      padding: 16px;
-      border-top: 1px solid var(--border);
-      background: var(--bg-footer);
-    }
-    .user-card {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 12px;
-    }
-    .user-avatar {
-      width: 34px;
-      height: 34px;
-      border-radius: 50%;
-      background: var(--bg-hover);
-      border: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 16px;
-      font-weight: 700;
-      color: var(--primary);
-    }
-    .user-info-text {
-      flex: 1;
-      overflow: hidden;
-    }
-    .user-name {
-      font-size: 13px;
-      font-weight: 600;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .user-vip {
-      font-size: 11px;
-      color: var(--primary);
-      display: flex;
-      align-items: center;
-      gap: 4px;
-    }
-    .quota-box {
-      font-size: 11px;
-      color: var(--text-dim);
-    }
-    .quota-bar {
-      height: 4px;
-      background: var(--progress-bg);
-      border-radius: 2px;
-      margin-top: 4px;
-      overflow: hidden;
-    }
-    .quota-fill {
-      height: 100%;
-      background: var(--primary);
-      width: 15%;
-    }
-
-    /* Main Area */
-    #main-wrapper {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-      background: var(--bg-body);
-    }
-    header {
-      height: 58px;
-      border-bottom: 1px solid var(--border);
-      background: var(--bg-card);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 24px;
-      flex-shrink: 0;
-    }
-    .breadcrumbs {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 14px;
-      color: var(--text-muted);
-      overflow-x: auto;
-    }
-    .crumb-item {
-      cursor: pointer;
-      color: #60a5fa;
-    }
-    .crumb-item:hover { text-decoration: underline; }
-    .crumb-item.current { color: var(--text); cursor: default; text-decoration: none; font-weight: 600; }
-    .crumb-sep { color: var(--text-dim); font-size: 12px; }
-
-    .header-actions {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    /* Buttons */
-    button {
-      cursor: pointer;
-      border: none;
-      border-radius: 7px;
-      font-weight: 500;
-      font-size: 13px;
-      transition: all 0.15s ease;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 7px 14px;
-    }
-    .btn-primary { background: var(--primary); color: #111; font-weight: 600; }
-    .btn-primary:hover { background: var(--primary-hover); }
-    .btn-accent { background: var(--accent); color: #fff; }
-    .btn-accent:hover { background: var(--accent-hover); }
-    .btn-secondary { background: #1e293b; border: 1px solid var(--border); color: #ffffff; }
-    .btn-secondary:hover { background: #28374d; color: #ffffff; }
-    .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text-muted); }
-    .btn-outline:hover { color: var(--text); border-color: var(--text-muted); background: #ffffff08; }
-    .btn-danger { background: #ef444418; color: #f87171; border: 1px solid #ef444435; }
-    .btn-danger:hover { background: #ef444430; }
-    .btn-sm { padding: 4px 10px; font-size: 12px; border-radius: 5px; }
-
-    /* Light Theme Button Enhancements (Ensuring high readability) */
-    body[data-theme="light"] .btn-secondary {
-      background: #1e293b;
-      border: 1px solid #334155;
-      color: #ffffff !important;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-    }
-    body[data-theme="light"] .btn-secondary:hover {
-      background: #334155;
-      color: #ffffff !important;
-    }
-    body[data-theme="light"] .btn-outline {
-      background: #ffffff;
-      border-color: #cbd5e1;
-      color: #334155;
-    }
-    body[data-theme="light"] .btn-outline:hover {
-      background: #f1f5f9;
-      color: #0f172a;
-      border-color: #94a3b8;
-    }
-    body[data-theme="light"] .btn-danger {
-      background: #fee2e2;
-      color: #dc2626;
-      border-color: #fca5a5;
-    }
-    body[data-theme="light"] .btn-danger:hover {
-      background: #fecaca;
-      color: #b91c1c;
-    }
-
-    /* Content Views */
-    .content-view {
-      flex: 1;
-      padding: 20px 24px;
-      overflow-y: auto;
-      display: none;
-    }
-    .content-view.active { display: block; }
-
-    /* Tables */
-    .table-container {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      overflow: hidden;
-    }
-    table { width: 100%; border-collapse: collapse; text-align: left; }
-    th {
-      background: var(--table-th-bg);
-      padding: 12px 18px;
-      font-size: 13px;
-      color: var(--text-muted);
-      font-weight: 600;
-      border-bottom: 1px solid var(--border);
-    }
-    td {
-      padding: 13px 18px;
-      font-size: 13.5px;
-      border-bottom: 1px solid var(--border);
-      vertical-align: middle;
-    }
-    tr:hover td { background: var(--table-hover); }
-    .file-name-cell {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-weight: 500;
-      cursor: pointer;
-    }
-    .file-icon { font-size: 20px; flex-shrink: 0; }
-    .file-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 450px; }
-    .actions-cell { display: flex; gap: 8px; }
-
-    /* Sub-tabs inside view */
-    .subtabs {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 16px;
-    }
-    .subtabs-left {
-      display: flex;
-      gap: 8px;
-      background: var(--bg-subtle);
-      padding: 4px;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-    }
-    .subtab-btn {
-      background: transparent;
-      color: var(--text-muted);
-      border: none;
-      padding: 6px 14px;
-      border-radius: 6px;
-      font-size: 13px;
-      cursor: pointer;
-    }
-    .subtab-btn.active {
-      background: var(--bg-hover);
-      color: var(--text);
-      font-weight: 600;
-    }
-
-    /* Cards / Lists */
-    .task-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 16px 20px;
-      margin-bottom: 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-    .task-card-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .task-title {
-      font-weight: 600;
-      font-size: 14px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: 650px;
-    }
-    .task-details {
-      display: flex;
-      justify-content: space-between;
-      font-size: 12.5px;
-      color: var(--text-muted);
-    }
-    .task-details-left {
-      display: flex;
       gap: 16px;
-      align-items: center;
-    }
-    .progress-bar-bg {
       width: 100%;
-      height: 7px;
-      background: var(--progress-bg);
-      border-radius: 4px;
-      overflow: hidden;
-    }
-    .progress-bar-fill {
-      height: 100%;
-      background: linear-gradient(90deg, #3b82f6, #60a5fa);
-      width: 0%;
-      transition: width 0.3s;
-    }
-    .progress-bar-fill.success {
-      background: #10b981;
     }
 
-    /* Badges */
-    .status-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      padding: 3px 9px;
-      border-radius: 5px;
-      font-size: 11.5px;
-      font-weight: 600;
-    }
-    .status-success { background: #10b98120; color: #34d399; border: 1px solid #10b98135; }
-    .status-active { background: #3b82f620; color: #60a5fa; border: 1px solid #3b82f635; }
-    .status-failed { background: #ef444420; color: #f87171; border: 1px solid #ef444435; }
-
-    /* Modals */
-    .modal-backdrop {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.75);
-      backdrop-filter: blur(5px);
-      z-index: 1000;
+    .rail-brand-logo {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      cursor: pointer;
+      display: flex;
       align-items: center;
       justify-content: center;
+      transition: transform 0.2s;
     }
-    .modal {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      width: 600px;
-      max-width: 92vw;
-      padding: 24px;
-      box-shadow: 0 25px 35px -5px rgba(0,0,0,0.6);
-      max-height: 85vh;
+    .rail-brand-logo:hover {
+      transform: scale(1.06);
+    }
+
+    .rail-menu {
       display: flex;
       flex-direction: column;
-    }
-    .modal-header {
-      display: flex;
-      justify-content: space-between;
       align-items: center;
-      margin-bottom: 18px;
-      font-size: 17px;
-      font-weight: 700;
-    }
-    .close-btn {
-      background: none;
-      border: none;
-      color: var(--text-muted);
-      font-size: 22px;
-      cursor: pointer;
-      line-height: 1;
-    }
-    .close-btn:hover { color: var(--text); }
-    .modal-footer {
-      margin-top: 22px;
-      display: flex;
-      justify-content: flex-end;
-      gap: 10px;
-    }
-
-    textarea, input[type="text"] {
+      gap: 6px;
       width: 100%;
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px 14px;
-      color: var(--text);
-      font-size: 13.5px;
-    }
-    textarea:focus, input[type="text"]:focus {
-      outline: none;
-      border-color: var(--primary);
-    }
-    .dropzone {
-      border: 2px dashed var(--border);
-      border-radius: 10px;
-      padding: 32px;
-      text-align: center;
-      color: var(--text-muted);
-      cursor: pointer;
-      transition: 0.2s;
-    }
-    .dropzone:hover {
-      border-color: var(--primary);
-      color: var(--text);
-      background: #ffffff04;
+      padding: 0 8px;
     }
 
-    /* Guangyapan Cloud Add & Folder Picker */
-    .btn-guangya-orange {
-      background: #ff6600;
-      color: #ffffff;
-      border: none;
-      border-radius: 9px;
-      padding: 9px 24px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      box-shadow: 0 2px 8px rgba(255, 102, 0, 0.28);
-      transition: all 0.15s ease;
-      display: inline-flex;
+    .rail-btn {
+      display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
-      white-space: nowrap;
-    }
-    .btn-guangya-orange:hover {
-      background: #e65c00;
-      box-shadow: 0 4px 12px rgba(255, 102, 0, 0.38);
-    }
-    .btn-guangya-orange:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-      box-shadow: none;
-    }
-    .cloud-dest-pill {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 12px;
-      border: 1px solid var(--border);
-      border-radius: 9px;
-      background: var(--bg-subtle);
+      width: 56px;
+      height: 52px;
+      border-radius: var(--radius-md);
       cursor: pointer;
-      font-size: 12.5px;
-      transition: all 0.2s ease;
-      user-select: none;
-      flex: 1;
-      min-width: 0;
+      color: var(--text-secondary);
+      transition: all 0.18s ease;
+      position: relative;
+      text-decoration: none;
     }
-    .cloud-dest-pill:hover {
-      border-color: #ff6600;
+
+    .rail-btn:hover {
       background: var(--bg-hover);
+      color: var(--brand);
     }
-    .cloud-file-row {
-      display: grid;
-      grid-template-columns: 1fr 65px 85px;
-      align-items: center;
-      padding: 9px 12px;
-      border-bottom: 1px solid var(--border-subtle);
-      font-size: 13px;
-      cursor: pointer;
-      transition: background 0.15s ease;
-      user-select: none;
+
+    .rail-btn.active {
+      background: var(--brand-alpha-8);
+      color: var(--brand);
+      font-weight: 600;
     }
-    .cloud-file-row:hover {
-      background: var(--bg-hover);
-    }
-    .cloud-file-row:last-child {
-      border-bottom: none;
-    }
-    /* Cloud Drive Save Destination Tree View (Replicating official Guangyapan Web) */
-    .cloud-tree-container {
-      height: 320px;
-      overflow-y: auto;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: var(--bg);
-      padding: 6px;
-      user-select: none;
-    }
-    .cloud-tree-node {
-      display: flex;
-      align-items: center;
-      height: 38px;
-      padding: 0 10px;
-      border-radius: 7px;
-      cursor: pointer;
-      transition: background 0.15s ease;
-      font-size: 13.5px;
-      margin-bottom: 2px;
-      border: 1px solid transparent;
-    }
-    .cloud-tree-node:hover {
-      background: var(--bg-hover);
-    }
-    .cloud-tree-node.selected {
-      background: var(--bg-subtle);
-      border-color: var(--border-subtle);
-      font-weight: 500;
-    }
-    .cloud-tree-arrow {
+
+    .rail-btn-icon {
       width: 22px;
       height: 22px;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 10px;
-      color: var(--text-dim);
-      flex-shrink: 0;
-      cursor: pointer;
-      border-radius: 4px;
-      transition: background 0.15s ease;
-    }
-    .cloud-tree-arrow:hover {
-      background: var(--border-subtle);
-      color: var(--text);
-    }
-    .cloud-tree-icon {
-      font-size: 16px;
-      margin-right: 8px;
-      flex-shrink: 0;
-    }
-    .cloud-tree-name {
-      flex: 1;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      min-width: 0;
-      color: var(--text);
-    }
-    .cloud-tree-check {
-      font-size: 15px;
-      font-weight: 700;
-      color: var(--text);
-      margin-left: 8px;
-      flex-shrink: 0;
-    }
-    .cloud-tree-tag-default {
-      display: inline-block;
-      background: rgba(255, 102, 0, 0.12);
-      color: #ff6600;
-      font-size: 11px;
-      padding: 2px 7px;
-      border-radius: 4px;
-      font-weight: 600;
-      flex-shrink: 0;
+      margin-bottom: 3px;
     }
 
-    /* Folder Selector Component */
-    .fs-browser-list {
+    .rail-btn-label {
+      font-size: 11px;
+      line-height: 1;
+      letter-spacing: -0.2px;
+    }
+
+    .rail-badge {
+      position: absolute;
+      top: 5px;
+      right: 7px;
+      background: var(--brand);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 10px;
+      min-width: 16px;
+      height: 16px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 1px 3px rgba(255, 104, 0, 0.4);
+    }
+
+    .rail-badge.dot {
+      width: 8px;
+      height: 8px;
+      min-width: 8px;
+      padding: 0;
+      border-radius: 50%;
+      top: 6px;
+      right: 12px;
+    }
+
+    .rail-bottom {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+    }
+
+    .rail-theme-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
       background: var(--bg-input);
       border: 1px solid var(--border);
-      border-radius: 8px;
-      max-height: 320px;
-      overflow-y: auto;
-      margin-top: 12px;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 15px;
+      transition: all 0.2s;
     }
-    .fs-folder-item {
+    .rail-theme-btn:hover {
+      color: var(--brand);
+      border-color: var(--brand);
+      transform: rotate(20deg);
+    }
+
+    /* Right Main Wrapper */
+    #main-wrapper {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      height: 100vh;
+      background: var(--bg-body);
+      overflow: hidden;
+      transition: background 0.2s;
+    }
+
+    /* Top Header (56px) */
+    #top-header {
+      height: 56px;
+      background: var(--bg-header);
+      border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 10px 14px;
-      border-bottom: 1px solid var(--border-subtle);
-      cursor: pointer;
-      font-size: 13.5px;
+      padding: 0 24px;
+      z-index: 90;
+      flex-shrink: 0;
+      transition: background 0.2s, border-color 0.2s;
     }
-    .fs-folder-item:last-child { border-bottom: none; }
-    .fs-folder-item:hover { background: var(--bg-hover); }
-    .fs-folder-item.selected { background: #3b82f625; color: #60a5fa; font-weight: 600; }
-    .fs-folder-left { display: flex; align-items: center; gap: 8px; }
 
-    /* Settings section */
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-shrink: 0;
+    }
+
+    .brand-full-logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      text-decoration: none;
+    }
+
+    .brand-duck-icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 7px;
+      object-fit: cover;
+    }
+
+    .brand-txt-svg {
+      height: 20px;
+      width: auto;
+    }
+    body[data-theme="dark"] .brand-txt-svg path[fill="#222222"] {
+      fill: #f0f0f0;
+    }
+
+    .fnos-badge {
+      font-size: 11px;
+      font-weight: 600;
+      background: rgba(59, 130, 246, 0.1);
+      color: #3b82f6;
+      border: 1px solid rgba(59, 130, 246, 0.25);
+      padding: 1px 7px;
+      border-radius: 4px;
+      margin-left: 2px;
+    }
+
+    /* Category Sub-navigation Tabs (kj) */
+    .header-center {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 16px;
+      min-width: 0;
+    }
+
+    .cat-tabs {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: var(--bg-input);
+      padding: 3px 4px;
+      border-radius: var(--radius-md);
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .cat-tabs::-webkit-scrollbar { display: none; }
+
+    .cat-tab-item {
+      padding: 5px 14px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.18s;
+      white-space: nowrap;
+      user-select: none;
+    }
+
+    .cat-tab-item:hover {
+      color: var(--text-main);
+    }
+
+    .cat-tab-item.active {
+      background: var(--bg-card);
+      color: var(--brand);
+      font-weight: 600;
+      box-shadow: var(--shadow-sm);
+    }
+
+    /* Header Right Capsule Tools */
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+
+    .storage-capsule {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-input);
+      padding: 6px 12px;
+      border-radius: var(--radius-full);
+      font-size: 12px;
+      color: var(--text-secondary);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .storage-bar-wrap {
+      width: 50px;
+      height: 4px;
+      background: rgba(150, 150, 150, 0.2);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .storage-bar-fill {
+      width: 0%;
+      height: 100%;
+      background: var(--vip-gradient);
+      border-radius: 2px;
+      transition: width 0.3s;
+    }
+
+    .user-profile-capsule {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-input);
+      padding: 4px 10px 4px 5px;
+      border-radius: var(--radius-full);
+      cursor: pointer;
+      border: 1px solid var(--border-subtle);
+      position: relative;
+      transition: all 0.2s;
+    }
+    .user-profile-capsule:hover {
+      border-color: var(--brand-alpha-25);
+    }
+
+    .user-avatar-circle {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: var(--brand-alpha-15);
+      color: var(--brand);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      border: 1.5px solid #ffd043;
+    }
+
+    .user-name-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-main);
+      max-width: 90px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .vip-tag {
+      font-size: 10px;
+      font-weight: 700;
+      background: var(--vip-gradient);
+      color: #ffffff;
+      padding: 1px 6px;
+      border-radius: 10px;
+      line-height: 1.2;
+    }
+
+    .user-dropdown-menu {
+      position: absolute;
+      top: 110%;
+      right: 0;
+      width: 220px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-lg);
+      padding: 8px;
+      display: none;
+      flex-direction: column;
+      gap: 4px;
+      z-index: 1000;
+    }
+    .user-profile-capsule:hover .user-dropdown-menu {
+      display: flex;
+    }
+
+    .user-dropdown-item {
+      padding: 8px 12px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      color: var(--text-regular);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: background 0.15s;
+    }
+    .user-dropdown-item:hover {
+      background: var(--bg-hover);
+      color: var(--brand);
+    }
+    .user-dropdown-item.danger:hover {
+      background: #fee2e2;
+      color: #ef4444;
+    }
+
+    /* Views Container */
+    #view-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+      padding: 16px 20px 20px 20px;
+    }
+
+    .content-view {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .content-view.active {
+      display: flex;
+    }
+
+    /* Card Panels */
+    .official-card {
+      background: var(--bg-card);
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    /* File Explorer Toolbar */
+    .file-toolbar {
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+
+    .toolbar-left, .toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    /* Button Styles */
+    .btn-primary {
+      background: var(--brand);
+      color: #ffffff;
+      border: none;
+      border-radius: var(--radius-md);
+      height: 36px;
+      padding: 0 16px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: var(--shadow-brand);
+      transition: all 0.18s;
+      white-space: nowrap;
+    }
+    .btn-primary:hover {
+      background: var(--brand-hover);
+      transform: translateY(-1px);
+    }
+    .btn-primary:active {
+      background: var(--brand-active);
+      transform: translateY(0);
+    }
+
+    .btn-secondary {
+      background: var(--btn-secondary-bg);
+      color: var(--text-main);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      height: 36px;
+      padding: 0 14px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.18s;
+      white-space: nowrap;
+    }
+    .btn-secondary:hover {
+      background: var(--btn-secondary-hover);
+      color: var(--brand);
+      border-color: var(--brand-alpha-25);
+    }
+
+    .btn-outline {
+      background: transparent;
+      color: var(--text-regular);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      height: 36px;
+      padding: 0 12px;
+      font-size: 13px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.18s;
+    }
+    .btn-outline:hover {
+      background: var(--bg-hover);
+      color: var(--brand);
+    }
+
+    .btn-icon {
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      border-radius: var(--radius-sm);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.18s;
+    }
+    .btn-icon:hover {
+      background: var(--bg-hover);
+      color: var(--text-main);
+    }
+    .btn-icon.active {
+      background: var(--bg-input);
+      color: var(--brand);
+      border-color: var(--border);
+    }
+
+    .btn-sm {
+      height: 28px;
+      padding: 0 10px;
+      font-size: 12px;
+      border-radius: var(--radius-sm);
+    }
+
+    .btn-danger {
+      background: #fee2e2;
+      color: #ef4444;
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+    .btn-danger:hover {
+      background: #ef4444;
+      color: #ffffff;
+    }
+
+    /* Search Box */
+    .search-box {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-input);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-full);
+      padding: 0 14px;
+      height: 36px;
+      width: 200px;
+      transition: all 0.2s;
+    }
+    .search-box:focus-within {
+      width: 240px;
+      border-color: var(--brand);
+      background: var(--bg-card);
+      box-shadow: 0 0 0 3px var(--brand-alpha-15);
+    }
+    .search-box input {
+      border: none;
+      background: transparent;
+      color: var(--text-main);
+      font-size: 13px;
+      outline: none;
+      width: 100%;
+    }
+
+    /* Breadcrumbs Bar */
+    .file-breadcrumbs {
+      padding: 9px 18px;
+      background: var(--bg-subtle);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--text-secondary);
+      flex-shrink: 0;
+      overflow-x: auto;
+    }
+
+    .crumb-item {
+      cursor: pointer;
+      transition: color 0.15s;
+      white-space: nowrap;
+    }
+    .crumb-item:hover {
+      color: var(--brand);
+    }
+    .crumb-item.current {
+      color: var(--text-main);
+      font-weight: 600;
+      cursor: default;
+    }
+    .crumb-sep {
+      color: var(--text-muted);
+      font-size: 12px;
+      user-select: none;
+    }
+
+    /* Table Container */
+    .table-container {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      text-align: left;
+    }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      background: var(--bg-card);
+      color: var(--text-muted);
+      font-weight: 500;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-subtle);
+      user-select: none;
+      z-index: 2;
+    }
+
+    tbody tr {
+      border-bottom: 1px solid var(--border-subtle);
+      transition: background 0.15s;
+    }
+    tbody tr:hover {
+      background: var(--bg-hover);
+    }
+
+    tbody td {
+      padding: 12px 16px;
+      color: var(--text-regular);
+      vertical-align: middle;
+    }
+
+    .file-name-cell {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      min-width: 0;
+    }
+
+    .file-icon {
+      font-size: 20px;
+      width: 24px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    .file-name-text {
+      font-weight: 500;
+      color: var(--text-main);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      transition: color 0.15s;
+    }
+    .file-name-cell:hover .file-name-text {
+      color: var(--brand);
+    }
+
+    .actions-cell {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      opacity: 0.85;
+      transition: opacity 0.15s;
+    }
+    tbody tr:hover .actions-cell {
+      opacity: 1;
+    }
+
+    /* Empty State */
+    .empty-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 60px 20px;
+      color: var(--text-secondary);
+      user-select: none;
+    }
+
+    .empty-duck-img {
+      width: 140px;
+      height: 140px;
+      object-fit: contain;
+      margin-bottom: 14px;
+      opacity: 0.9;
+    }
+
+    .empty-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-main);
+      margin-bottom: 6px;
+    }
+
+    .empty-sub {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    /* Subtabs inside Views */
+    .subtabs {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: var(--bg-card);
+    }
+
+    .subtabs-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .subtab-btn {
+      padding: 6px 14px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      font-weight: 500;
+      background: var(--bg-input);
+      color: var(--text-secondary);
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: all 0.18s;
+    }
+    .subtab-btn:hover {
+      color: var(--text-main);
+    }
+    .subtab-btn.active {
+      background: var(--brand-alpha-8);
+      color: var(--brand);
+      border-color: var(--brand-alpha-15);
+      font-weight: 600;
+    }
+
+    /* Task Cards / Lists */
+    .task-list-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .task-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      transition: all 0.18s;
+    }
+    .task-card:hover {
+      box-shadow: var(--shadow-sm);
+      border-color: var(--brand-alpha-25);
+    }
+
+    .task-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .task-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-main);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .task-meta {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .progress-bar-wrap {
+      width: 100%;
+      height: 6px;
+      background: var(--bg-input);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: var(--vip-gradient);
+      border-radius: 3px;
+      transition: width 0.2s;
+    }
+
+    /* Settings Page Grid */
+    .settings-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 16px;
+      padding: 18px;
+      overflow-y: auto;
+    }
+
     .setting-card {
       background: var(--bg-card);
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: var(--radius-lg);
       padding: 20px;
-      margin-bottom: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      box-shadow: var(--shadow-sm);
     }
+
     .setting-card-title {
       font-size: 15px;
-      font-weight: 700;
-      margin-bottom: 12px;
+      font-weight: 600;
+      color: var(--text-main);
       display: flex;
       align-items: center;
       gap: 8px;
     }
-    .setting-row {
+
+    .setting-card-desc {
+      font-size: 13px;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
+
+    /* Modal Backdrop & Popup */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.55);
+      backdrop-filter: blur(4px);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+
+    .modal {
+      background: var(--bg-card);
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-lg);
+      display: flex;
+      flex-direction: column;
+      max-height: 90vh;
+      overflow: hidden;
+      animation: modalPop 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes modalPop {
+      0% { transform: scale(0.96); opacity: 0; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    .modal-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border-subtle);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 12px;
-      font-size: 13.5px;
     }
-    .setting-desc {
+
+    .modal-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .modal-body {
+      padding: 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      font-size: 13px;
+      color: var(--text-regular);
+    }
+
+    .modal-footer {
+      padding: 14px 20px;
+      border-top: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      background: var(--bg-subtle);
+    }
+
+    /* Form Controls */
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .form-label {
       font-size: 12px;
-      color: var(--text-muted);
-      margin-top: 4px;
-      line-height: 1.5;
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+    .form-input {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 8px 12px;
+      color: var(--text-main);
+      font-size: 13px;
+      outline: none;
+      transition: all 0.2s;
+    }
+    .form-input:focus {
+      border-color: var(--brand);
+      background: var(--bg-card);
+      box-shadow: 0 0 0 3px var(--brand-alpha-15);
     }
 
     /* Toast */
     #toast {
       position: fixed;
-      bottom: 24px;
-      right: 24px;
-      background: #1e293b;
-      border: 1px solid #334155;
-      border-radius: 8px;
-      padding: 12px 20px;
-      color: #f8fafc;
-      box-shadow: 0 10px 25px -3px rgba(0,0,0,0.5);
-      transform: translateY(100px);
-      opacity: 0;
-      transition: all 0.25s ease;
-      z-index: 9999;
-      font-size: 13.5px;
+      bottom: 28px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: rgba(30, 30, 30, 0.95);
+      color: #ffffff;
+      padding: 10px 20px;
+      border-radius: var(--radius-full);
+      font-size: 13px;
       font-weight: 500;
+      box-shadow: var(--shadow-lg);
+      z-index: 2000;
+      opacity: 0;
       pointer-events: none;
+      transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
     }
-    #toast.show { transform: translateY(0); opacity: 1; }
-    body[data-theme="light"] #toast {
-      background: #ffffff;
-      border: 1px solid #cbd5e1;
-      color: #0f172a !important;
-      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
-      font-weight: 600;
+    #toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
     }
 
     /* Mobile Responsive Adaptation */
-    .mobile-header-top { display: none; }
-    .mobile-bottom-nav { display: none; }
-    .mobile-only-usercard { display: none; }
-    .mobile-text { display: none; }
-    .desktop-text { display: inline; }
-    .desktop-only-btn { display: inline-flex; }
-
     @media (max-width: 768px) {
-      body {
-        overflow: hidden;
-        height: 100vh;
-        height: 100dvh;
+      #app-container {
+        flex-direction: column;
       }
-      #sidebar {
-        display: none !important;
+      #nav-rail {
+        order: 2;
+        width: 100vw;
+        height: 56px;
+        flex-direction: row;
+        border-right: none;
+        border-top: 1px solid var(--border);
+        padding: 0 12px;
+      }
+      .rail-top, .rail-bottom {
+        display: none;
+      }
+      .rail-menu {
+        flex-direction: row;
+        justify-content: space-around;
+        width: 100%;
+        padding: 0;
+      }
+      .rail-btn {
+        width: 50px;
+        height: 48px;
+        margin-bottom: 0;
       }
       #main-wrapper {
-        width: 100% !important;
-        height: 100vh !important;
-        height: 100dvh !important;
+        order: 1;
+        height: calc(100vh - 56px);
       }
-      
-      /* Mobile Header */
-      header {
-        height: auto !important;
-        padding: 10px 14px !important;
-        flex-direction: column !important;
-        align-items: stretch !important;
-        gap: 8px !important;
+      #top-header {
+        padding: 0 14px;
       }
-      .mobile-header-top {
-        display: flex !important;
-        justify-content: space-between !important;
-        align-items: center !important;
+      .header-center {
+        display: none;
       }
-      .mobile-brand {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 16px;
-        font-weight: 700;
-        color: var(--text);
+      .storage-capsule {
+        display: none;
       }
-      .mobile-brand-img {
-        width: 26px;
-        height: 26px;
-        border-radius: 6px;
-        object-fit: contain;
+      #view-container {
+        padding: 10px;
       }
-      .mobile-header-tools {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-      }
-      .btn-icon {
-        padding: 6px 10px !important;
-        font-size: 13px !important;
-      }
-      .breadcrumbs {
-        font-size: 13px;
-        padding: 2px 0;
-        white-space: nowrap;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-      }
-      .breadcrumbs::-webkit-scrollbar { display: none; }
-
-      /* Horizontal Action Bar on Mobile */
-      .header-actions {
-        width: 100%;
-        display: flex !important;
-        gap: 6px !important;
-        overflow-x: auto !important;
-        white-space: nowrap !important;
-        padding-bottom: 2px !important;
-        -webkit-overflow-scrolling: touch;
-      }
-      .header-actions::-webkit-scrollbar { display: none; }
-      .header-actions button {
-        padding: 6px 10px !important;
-        font-size: 12.5px !important;
-        flex-shrink: 0 !important;
-        border-radius: 6px !important;
-      }
-
-      #themeToggleBtn {
-        display: none !important;
-      }
-
-      /* Content Area with Bottom Padding for Mobile Nav */
-      .content-view {
-        padding: 12px 12px calc(68px + env(safe-area-inset-bottom, 0px)) 12px !important;
-      }
-
-      /* Mobile Table Adjustments */
-      .table-container {
-        border-radius: 8px;
-        overflow-x: hidden;
-      }
-      table th:nth-child(3), table td:nth-child(3) {
-        display: none !important;
-      }
-      table th:nth-child(2), table td:nth-child(2) {
-        width: 72px !important;
-        text-align: right !important;
-        font-size: 12px !important;
-        padding: 10px 8px !important;
-      }
-      table th:first-child, table td:first-child {
-        padding: 10px 10px !important;
-      }
-      table th:last-child, table td:last-child {
-        width: 90px !important;
-        padding: 10px 8px !important;
-        text-align: right !important;
-      }
-      .file-name-text {
-        max-width: 160px !important;
-        font-size: 13.5px !important;
-      }
-      .mobile-text { display: inline !important; }
-      .desktop-text { display: none !important; }
-      .desktop-only-btn { display: none !important; }
-      .actions-cell {
-        gap: 4px !important;
-        justify-content: flex-end !important;
-      }
-      .actions-cell button {
-        padding: 5px 8px !important;
-        font-size: 12px !important;
-      }
-
-      /* Subtabs */
-      .subtabs {
-        flex-direction: column !important;
-        align-items: stretch !important;
-        gap: 8px !important;
-      }
-      .subtabs-left {
-        overflow-x: auto !important;
-        white-space: nowrap !important;
-        -webkit-overflow-scrolling: touch;
-      }
-      .subtabs-left::-webkit-scrollbar { display: none; }
-      .subtab-btn {
-        padding: 6px 10px !important;
-        font-size: 12px !important;
-      }
-
-      /* Task Cards on Mobile */
-      .task-card {
-        padding: 12px 14px !important;
-      }
-      .task-title {
-        max-width: 200px !important;
-        font-size: 13.5px !important;
-      }
-      .task-details {
-        flex-direction: column !important;
-        gap: 6px !important;
-      }
-      .task-details-left {
-        flex-wrap: wrap !important;
-        gap: 8px !important;
-      }
-
-      /* User profile in settings */
-      .mobile-only-usercard {
-        display: block !important;
-      }
-      .mobile-user-header {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-      }
-
-      /* Modals on Mobile */
-      .modal {
-        width: 92% !important;
-        max-width: 92% !important;
-        margin: 15px auto !important;
-        padding: 18px !important;
-        max-height: 90vh !important;
-      }
-
-      /* Bottom Nav Bar */
-      .mobile-bottom-nav {
-        display: flex !important;
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        height: calc(56px + env(safe-area-inset-bottom, 0px));
-        padding-bottom: env(safe-area-inset-bottom, 0px);
-        background: var(--bg-sidebar);
-        border-top: 1px solid var(--border);
-        z-index: 999;
-        justify-content: space-around;
-        align-items: center;
-        box-shadow: 0 -2px 10px rgba(0,0,0,0.2);
-      }
-      .mobile-nav-item {
-        flex: 1;
-        display: flex;
+      .file-toolbar {
         flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        height: 100%;
-        cursor: pointer;
-        color: var(--text-muted);
-        transition: color 0.15s ease;
-        position: relative;
-        -webkit-tap-highlight-color: transparent;
+        align-items: stretch;
       }
-      .mobile-nav-item.active {
-        color: var(--primary);
+      .toolbar-left, .toolbar-right {
+        width: 100%;
+        justify-content: space-between;
       }
-      .mobile-nav-icon {
-        font-size: 19px;
-        position: relative;
-        line-height: 1;
-        margin-bottom: 2px;
-      }
-      .mobile-nav-label {
-        font-size: 11px;
-        font-weight: 500;
-      }
-      .mobile-badge {
-        position: absolute;
-        top: -4px;
-        right: -10px;
-        background: var(--accent);
-        color: #fff;
-        font-size: 10px;
-        font-weight: 700;
-        border-radius: 9px;
-        padding: 1px 5px;
-        min-width: 15px;
-        text-align: center;
-      }
-      .mobile-badge.orange {
-        background: var(--primary);
-      }
-      #toast {
-        left: 50% !important;
-        right: auto !important;
-        transform: translate(-50%, 100px) !important;
-        bottom: calc(68px + env(safe-area-inset-bottom, 0px)) !important;
-        white-space: nowrap !important;
-      }
-      #toast.show {
-        transform: translate(-50%, 0) !important;
+      .search-box {
+        width: 100% !important;
       }
     }
-
   </style>
 </head>
-<body>
+<body data-theme="light">
 
-  <!-- Left Sidebar (Windows/fnOS Style) -->
-  <aside id="sidebar">
-    <div class="brand-box">
-      <img src="/icon.png?v=1.0.5" class="brand-icon" style="width:34px;height:34px;border-radius:8px;object-fit:cover;flex-shrink:0;" alt="光鸭网盘">
-      <div>
-        <div class="brand-name">光鸭网盘 <span class="brand-badge">fnOS</span></div>
-        <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">飞牛 NAS 客户端 · by chaos</div>
+<div id="app-container">
+
+  <!-- Left Navigation Rail (72px official dock) -->
+  <aside id="nav-rail">
+    <div class="rail-top">
+      <div class="rail-brand-logo" onclick="switchView('files')" title="光鸭网盘">
+        <svg width="34" height="34" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <g clip-path="url(#duck_clip)">
+            <path d="M0 7.125C0 3.18997 3.18997 0 7.125 0H24.875C28.81 0 32 3.18997 32 7.125V24.875C32 28.81 28.81 32 24.875 32H7.125C3.18997 32 0 28.81 0 24.875V7.125Z" fill="#FF6800"/>
+            <path d="M0 7.125C0 3.18997 3.18997 0 7.125 0H24.875C28.81 0 32 3.18997 32 7.125V24.875C32 28.81 28.81 32 24.875 32H7.125C3.18997 32 0 28.81 0 24.875V7.125Z" fill="url(#duck_radial)" fill-opacity="0.7"/>
+            <path d="M17.1816 12.4555C18.0894 12.4555 18.8253 13.1893 18.8253 14.0944C18.8253 14.9995 18.0894 15.7333 17.1816 15.7333C16.2738 15.7333 15.5378 14.9995 15.5378 14.0944C15.5378 13.1893 16.2737 12.4555 17.1816 12.4555Z" fill="white"/>
+            <path fill-rule="evenodd" clip-rule="evenodd" d="M16.7571 6.62427C20.7472 6.62427 24.1578 9.09836 25.53 12.5919C25.5793 12.7175 25.6997 12.8022 25.835 12.8022H28.6225C28.7458 12.8022 28.8457 12.9018 28.8457 13.0248C28.8457 13.2536 28.821 13.3611 28.7741 13.576C28.7713 13.5886 28.7685 13.6013 28.7655 13.6138C28.7626 13.6264 28.7596 13.639 28.7566 13.6515C28.7505 13.6765 28.744 13.7015 28.7373 13.7263C28.7306 13.7511 28.7235 13.7758 28.7162 13.8003C28.6979 13.8617 28.6777 13.9223 28.6558 13.982C28.6514 13.994 28.647 14.0059 28.6424 14.0177C28.5836 14.1722 28.5127 14.3207 28.4311 14.4623C28.4248 14.4732 28.4185 14.484 28.4121 14.4948C28.3928 14.5272 28.3731 14.5593 28.3527 14.5909C28.3324 14.6226 28.3114 14.6538 28.29 14.6847C28.267 14.7178 28.2433 14.7503 28.2191 14.7824C28.194 14.8158 28.1681 14.8486 28.1417 14.8808C28.1324 14.8922 28.123 14.9036 28.1135 14.9149C28.0791 14.9557 28.0437 14.9957 28.0073 15.0347C27.9732 15.0712 27.9382 15.1069 27.9024 15.1418C27.8713 15.1721 27.8395 15.2017 27.8072 15.2306C27.7692 15.2646 27.7304 15.2977 27.6908 15.3299C27.6435 15.3683 27.5951 15.4053 27.5456 15.4409C27.3973 15.5477 27.2392 15.6418 27.073 15.7217C27.0616 15.7272 27.0502 15.7326 27.0387 15.7379C26.9615 15.7739 26.8825 15.8067 26.802 15.8364C26.7362 15.8606 26.6694 15.8828 26.6017 15.9027C26.5552 15.9163 26.5082 15.929 26.4608 15.9406C26.4106 15.9528 26.3598 15.9638 26.3087 15.9736C26.2646 15.982 26.2201 15.9894 26.1753 15.996C26.1139 16.005 25.8088 16.0149 25.715 16.0149H22.5902L22.5902 16.0157H23.074C22.6448 16.0355 22.5863 16.4031 22.5659 16.5906L22.5658 16.5893C22.2682 21.5081 18.1731 25.4055 13.165 25.4055C8.07136 25.4055 3.92212 21.3738 3.75213 16.3364C3.74616 16.1593 3.89079 16.0149 4.06849 16.0149H6.83436C7.14554 15.9917 7.31024 15.8661 7.35741 15.3951V15.4213C7.66457 10.5116 11.7555 6.62429 16.7571 6.62427ZM16.7571 10.2183C13.6543 10.2183 11.1192 12.6418 10.9522 15.694C10.9425 15.8709 10.7994 16.0149 10.6217 16.0149H7.68982C7.43331 16.0335 7.37241 16.2308 7.36201 16.3701C7.54605 19.4061 10.0738 21.8115 13.165 21.8115C16.2678 21.8115 18.8029 19.388 18.9699 16.3358C18.9796 16.1588 19.1227 16.0149 19.3004 16.0149H22.1534C22.4713 15.9561 22.5506 15.6831 22.5486 15.5052C22.2897 12.5425 19.7956 10.2183 16.7571 10.2183Z" fill="white"/>
+          </g>
+          <defs>
+            <radialGradient id="duck_radial" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(26.8438 0.593749) rotate(127.312) scale(24.282)">
+              <stop stop-color="#FFC30E"/>
+              <stop offset="1" stop-color="#FFA70E" stop-opacity="0"/>
+            </radialGradient>
+            <clipPath id="duck_clip">
+              <rect width="32" height="32" rx="7" fill="white"/>
+            </clipPath>
+          </defs>
+        </svg>
       </div>
     </div>
 
-    <div class="nav-list">
-      <div class="nav-item active" id="navFiles" onclick="switchView('files')">
-        <div class="nav-item-left">
-          <span>📁</span>
-          <span>网盘文件</span>
+    <!-- Middle Menu Items -->
+    <div class="rail-menu">
+      <div class="rail-btn active" id="navFiles" onclick="switchView('files')" title="全部文件">
+        <div class="rail-btn-icon">
+          <!-- Official TabbarHome SVG -->
+          <svg width="20" height="20" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M6.782 1.196a3.75 3.75 0 0 1 4.436 0l4.5 3.3A3.75 3.75 0 0 1 17.25 7.52v5.98a3.75 3.75 0 0 1-3.75 3.75h-9A3.75 3.75 0 0 1 .75 13.5V7.52c0-1.194.57-2.318 1.532-3.024zM9 9.25a.75.75 0 0 0-.75.75v3a.75.75 0 0 0 1.5 0v-3A.75.75 0 0 0 9 9.25"/>
+          </svg>
         </div>
+        <span class="rail-btn-label">首页</span>
       </div>
 
-      <div class="nav-item" id="navTransfers" onclick="switchView('transfers')">
-        <div class="nav-item-left">
-          <span>⬇️</span>
-          <span>传输列表</span>
+      <div class="rail-btn" id="navOffline" onclick="switchView('offline')" title="云添加 / 离线任务">
+        <div class="rail-btn-icon">
+          <!-- Official TabbarAddcloud SVG -->
+          <svg width="20" height="20" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M8.95 1.25a5.75 5.75 0 0 1 5.64 4.64 5.75 5.75 0 0 1-2.64 10.86h-6A5.75 5.75 0 0 1 .2 11 5.75 5.75 0 0 1 3.31 5.89 5.75 5.75 0 0 1 8.95 1.25m1.332 6.874a1.75 1.75 0 0 0-2.564 0L6.45 9.489a.75.75 0 0 0 1.1 1.02l.7-.754V12.5a.75.75 0 0 0 1.5 0V9.755l.7.755a.75.75 0 0 0 1.1-1.02z"/>
+          </svg>
         </div>
-        <span class="nav-badge" id="activeDlBadge" style="display: none;">0</span>
+        <span class="rail-btn-label">云添加</span>
+        <span class="rail-badge" id="cloudTaskBadge" style="display: none;">0</span>
       </div>
 
-      <div class="nav-item" id="navOffline" onclick="switchView('offline')">
-        <div class="nav-item-left">
-          <span>⚡</span>
-          <span>离线下载</span>
+      <div class="rail-btn" id="navTransfers" onclick="switchView('transfers')" title="传输列表 (NAS本地)">
+        <div class="rail-btn-icon">
+          <!-- ComputerDownload SVG -->
+          <svg width="20" height="20" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path fill="currentColor" d="M2.5 13.5a.75.75 0 0 0 0 1.5h13a.75.75 0 0 0 0-1.5zM9 2.25a.75.75 0 0 1 .75.75v6.44l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.22 2.22V3a.75.75 0 0 1 .75-.75"/>
+          </svg>
         </div>
-        <span class="nav-badge orange" id="cloudTaskBadge" style="display: none;">0</span>
+        <span class="rail-btn-label">传输</span>
+        <span class="rail-badge" id="activeDlBadge" style="display: none;">0</span>
       </div>
 
-      <div class="nav-item" id="navSettings" onclick="switchView('settings')">
-        <div class="nav-item-left">
-          <span>⚙️</span>
-          <span>系统设置</span>
+      <div class="rail-btn" id="navTrash" onclick="switchView('trash')" title="回收站">
+        <div class="rail-btn-icon">
+          <!-- Official TabbarRecycle SVG -->
+          <svg width="20" height="20" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M16.5 3.25a.75.75 0 0 1 0 1.5h-.765l-1.164 9.439a3.76 3.76 0 0 1-3.733 3.311H7.133a3.76 3.76 0 0 1-3.735-3.322L2.264 4.75H1.5a.75.75 0 0 1 0-1.5zM7.241 9.613a.6.6 0 0 0-.833.16l-.686 1.01a1.1 1.1 0 0 0 .92 1.717l1.445-.014a.601.601 0 0 0-.012-1.2l-1.254.012.5"/>
+          </svg>
         </div>
-        <span class="nav-badge orange" id="settingsUpdateBadge" style="display: none;">NEW</span>
+        <span class="rail-btn-label">回收站</span>
+      </div>
+
+      <div class="rail-btn" id="navSettings" onclick="switchView('settings')" title="设置">
+        <div class="rail-btn-icon">
+          <!-- Official TabbarSetting SVG -->
+          <svg width="20" height="20" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M10.527 1.25a4.75 4.75 0 0 1 4.07 2.302l1.805 3a4.75 4.75 0 0 1 0 4.896l-1.804 3a4.75 4.75 0 0 1-4.07 2.302H7.472a4.75 4.75 0 0 1-4.07-2.302l-1.805-3a4.75 4.75 0 0 1 0-4.896l1.804-3a4.75 4.75 0 0 1 4.07-2.302zM9 6.25a2.75 2.75 0 1 0 0 5.5 2.75 2.75 0 0 0 0-5.5"/>
+          </svg>
+        </div>
+        <span class="rail-btn-label">设置</span>
+        <span class="rail-badge dot" id="settingsUpdateBadge" style="display: none;"></span>
       </div>
     </div>
 
-    <div class="sidebar-footer">
-      <div class="user-card" id="userCardBox">
-        <div class="user-avatar" id="userAvatarText">🦆</div>
-        <div class="user-info-text">
-          <div class="user-name" id="userNameText">连接中...</div>
-          <div class="user-vip" id="userVipText">会员已生效</div>
-        </div>
-        <button class="btn-outline btn-sm" id="userActionBtn" onclick="handleUserAction()" style="padding: 2px 7px; font-size: 11px;">🚪 退出</button>
-      </div>
-      <div class="quota-box">
-        <div style="display: flex; justify-content: space-between;">
-          <span>存储空间</span>
-          <span id="quotaText">-- / --</span>
-        </div>
-        <div class="quota-bar"><div class="quota-fill" id="quotaFillBar"></div></div>
-      </div>
+    <!-- Bottom Rail Items -->
+    <div class="rail-bottom">
+      <button class="rail-theme-btn" id="themeToggleBtn" onclick="toggleTheme()" title="切换亮色/暗色模式">🌙</button>
     </div>
   </aside>
 
-  <!-- Main View Area -->
+  <!-- Right Main View -->
   <div id="main-wrapper">
-    <header>
-      <div class="mobile-header-top">
-        <div class="mobile-brand">
-          <img src="/icon.png?v=1.0.5" class="mobile-brand-img" style="width:26px;height:26px;border-radius:6px;object-fit:cover;flex-shrink:0;" alt="光鸭网盘">
-          <span>光鸭网盘 <span class="brand-badge" style="font-size:10px;">by chaos</span></span>
-        </div>
-        <div class="mobile-header-tools">
-          <button class="btn-secondary btn-icon" id="mobileThemeBtn" onclick="toggleTheme()" title="切换日夜模式">🌙</button>
-          <button class="btn-outline btn-icon" onclick="refreshCurrentView()" title="刷新">🔄</button>
+
+    <!-- Top Header (56px) -->
+    <header id="top-header">
+      <div class="header-left">
+        <div class="brand-full-logo" onclick="switchView('files')">
+          <img src="/brand_guangya_txt.svg" class="brand-txt-svg" alt="光鸭网盘">
+          <span class="fnos-badge">fnOS</span>
         </div>
       </div>
-      <div class="breadcrumbs" id="breadcrumbs">
-        <span class="crumb-item current">网盘文件</span>
+
+      <!-- Center Category Navigation Tabs (kj array) -->
+      <div class="header-center">
+        <div class="cat-tabs" id="categoryTabsNav">
+          <div class="cat-tab-item active" data-cat="all" onclick="switchCategory('all')">全部</div>
+          <div class="cat-tab-item" data-cat="recent" onclick="switchCategory('recent')">最近</div>
+          <div class="cat-tab-item" data-cat="video" onclick="switchCategory('video')">视频</div>
+          <div class="cat-tab-item" data-cat="img" onclick="switchCategory('img')">图片</div>
+          <div class="cat-tab-item" data-cat="doc" onclick="switchCategory('doc')">文档</div>
+          <div class="cat-tab-item" data-cat="audio" onclick="switchCategory('audio')">音频</div>
+          <div class="cat-tab-item" data-cat="installer" onclick="switchCategory('installer')">安装包</div>
+        </div>
       </div>
-      <div class="header-actions">
-        <button class="btn-secondary" id="themeToggleBtn" onclick="toggleTheme()" title="切换日夜模式">🌙 夜间</button>
-        <button class="btn-primary" onclick="openCloudAddModal()">⚡ 离线添加 (磁链/BT)</button>
-        <button class="btn-accent" onclick="openUploadModal()">⬆️ 上传文件</button>
-        <button class="btn-secondary" onclick="promptCreateFolder()">📁 新建文件夹</button>
-        <button class="btn-outline" onclick="refreshCurrentView()">🔄 刷新</button>
+
+      <!-- Right Profile & Storage Capsule -->
+      <div class="header-right">
+        <!-- Storage Capsule -->
+        <div class="storage-capsule" title="云盘存储空间">
+          <svg width="15" height="15" viewBox="0 0 18 18" fill="none" style="color: var(--brand);">
+            <path fill="currentColor" d="M8.475 1.538c2.784.016 5.167 1.846 5.977 4.499a5.25 5.25 0 0 1 3.292 5.13q.005.123.006.246a.75.75 0 0 1-.06.294 5.25 5.25 0 0 1-4.79 4.438 1 1 0 0 1-.15.016h-.187a2 2 0 0 1-.127 0H4.75a.8.8 0 0 1-.16-.019A4.748 4.748 0 0 1 2.27 7.528c.24-3.446 2.875-6.01 6.206-5.99m-.01 1.5c-2.575-.015-4.673 2.03-4.714 4.92a.75.75 0 0 1-.375.64 3.248 3.248 0 0 0 1.42 6.057q.018.002.03"/>
+          </svg>
+          <span id="quotaText">-- / --</span>
+          <div class="storage-bar-wrap">
+            <div class="storage-bar-fill" id="quotaFillBar"></div>
+          </div>
+        </div>
+
+        <!-- User Capsule -->
+        <div class="user-profile-capsule" id="userCardBox" onclick="handleUserAction()">
+          <div class="user-avatar-circle" id="userAvatarText">🦆</div>
+          <span class="user-name-label" id="userNameText">连接中...</span>
+          <span class="vip-tag" id="userVipText">SVIP</span>
+
+          <!-- User Dropdown Menu -->
+          <div class="user-dropdown-menu" onclick="event.stopPropagation()">
+            <div class="user-dropdown-item" style="font-weight: 600; border-bottom: 1px solid var(--border-subtle); margin-bottom: 4px;">
+              <span>🦆 个人空间</span>
+            </div>
+            <div class="user-dropdown-item" onclick="openLoginModal()">
+              <span>🔄 切换/重新登录</span>
+            </div>
+            <div class="user-dropdown-item danger" id="userActionBtn" onclick="confirmLogout()">
+              <span>🚪 退出登录</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Refresh Button -->
+        <button class="btn-icon" onclick="refreshCurrentView()" title="刷新当前页面">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+          </svg>
+        </button>
       </div>
     </header>
 
-    <!-- VIEW 1: FILES -->
-    <div class="content-view active" id="view-files">
-      <div class="table-container">
-        <table>
-          <thead>
-            <tr>
-              <th>名称</th>
-              <th style="width: 140px;">大小</th>
-              <th style="width: 180px;">修改时间</th>
-              <th style="width: 220px; text-align: right; padding-right: 24px;">操作</th>
-            </tr>
-          </thead>
-          <tbody id="fileTableBody">
-            <tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 50px;">正在加载网盘文件...</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
+    <!-- Main Views Container -->
+    <div id="view-container">
 
-    <!-- VIEW 2: TRANSFERS -->
-    <div class="content-view" id="view-transfers">
-      <div class="subtabs">
-        <div class="subtabs-left">
-          <button class="subtab-btn active" id="tabDlActiveBtn" onclick="switchTransferTab('active')">正在下载 (<span id="countActiveDl">0</span>)</button>
-          <button class="subtab-btn" id="tabDlDoneBtn" onclick="switchTransferTab('done')">已完成 (<span id="countDoneDl">0</span>)</button>
-        </div>
-        <div>
-          <button class="btn-outline btn-sm" onclick="clearCompletedDownloads()">清空已完成记录</button>
-        </div>
-      </div>
+      <!-- VIEW 1: FILES EXPLORER -->
+      <div class="content-view active" id="view-files">
+        <div class="official-card">
+          <!-- File Toolbar -->
+          <div class="file-toolbar">
+            <div class="toolbar-left">
+              <button class="btn-primary" onclick="openUploadModal()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 5v14M5 12h14"/>
+                </svg>
+                <span>上传文件</span>
+              </button>
+              <button class="btn-secondary" onclick="promptCreateFolder()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                  <line x1="12" y1="11" x2="12" y2="17"/>
+                  <line x1="9" y1="14" x2="15" y2="14"/>
+                </svg>
+                <span>新建文件夹</span>
+              </button>
+              <button class="btn-secondary" onclick="openCloudAddModal()" style="color: var(--brand); border-color: var(--brand-alpha-25);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                </svg>
+                <span>云添加 (磁链/BT)</span>
+              </button>
+            </div>
 
-      <div id="transfersListContainer">
-        <!-- populated by js -->
-      </div>
-    </div>
+            <div class="toolbar-right">
+              <!-- Search Box -->
+              <div class="search-box">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-muted);">
+                  <circle cx="11" cy="11" r="8"/>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                </svg>
+                <input type="text" id="fileSearchInput" placeholder="搜索我的网盘文件..." oninput="handleSearch(this.value)">
+              </div>
 
-    <!-- VIEW 3: OFFLINE (Cloud tasks) -->
-    <div class="content-view" id="view-offline">
-      <div class="subtabs">
-        <div class="subtabs-left">
-          <button class="subtab-btn active" id="tabOfflineAll" onclick="filterOfflineTasks('all')">全部 (<span id="countOfflineAll">0</span>)</button>
-          <button class="subtab-btn" id="tabOfflineRunning" onclick="filterOfflineTasks('running')">进行中 (<span id="countOfflineRunning">0</span>)</button>
-          <button class="subtab-btn" id="tabOfflineDone" onclick="filterOfflineTasks('done')">已完成 (<span id="countOfflineDone">0</span>)</button>
-          <button class="subtab-btn" id="tabOfflineFailed" onclick="filterOfflineTasks('failed')">失败 (<span id="countOfflineFailed">0</span>)</button>
-        </div>
-        <div>
-          <button class="btn-primary btn-sm" onclick="openCloudAddModal()">➕ 新建离线下载</button>
-          <button class="btn-outline btn-sm" onclick="loadCloudTasks()">🔄 刷新列表</button>
-        </div>
-      </div>
-
-      <div id="offlineListContainer">
-        <!-- populated by js -->
-      </div>
-    </div>
-
-    <!-- VIEW 4: SETTINGS -->
-    <div class="content-view" id="view-settings">
-      <!-- Mobile Only User Info Card -->
-      <div class="setting-card mobile-only-usercard">
-        <div class="mobile-user-header">
-          <div class="user-avatar" id="mobileUserAvatar">👤</div>
-          <div style="flex: 1;">
-            <div style="font-size: 16px; font-weight: 700;" id="mobileUserName">连接中...</div>
-            <div style="font-size: 12px; color: var(--primary); margin-top: 3px;" id="mobileUserVip">会员已生效</div>
-          </div>
-          <button class="btn-danger btn-sm" id="mobileLogoutBtn" onclick="confirmLogout()">🚪 退出登录</button>
-          <button class="btn-primary btn-sm" id="mobileLoginBtn" onclick="openLoginModal()" style="display: none;">🔑 立即登录</button>
-        </div>
-        <div class="quota-box" style="margin-top: 14px; padding: 12px; background: var(--bg-hover); border-radius: 8px;">
-          <div style="display: flex; justify-content: space-between; font-size: 12.5px; margin-bottom: 6px;">
-            <span style="color: var(--text-muted);">存储空间</span>
-            <span id="mobileQuotaText" style="font-weight: 600;">-- / --</span>
-          </div>
-          <div class="quota-bar" style="height: 6px; background: var(--border);"><div class="quota-fill" id="mobileQuotaFillBar" style="height: 100%;"></div></div>
-        </div>
-      </div>
-
-      <!-- Account Management Card (Both PC and Mobile) -->
-      <div class="setting-card">
-        <div class="setting-card-title">👤 账号登录与授权管理</div>
-        <div class="setting-row">
-          <div>
-            <div style="font-weight: 600;">当前光鸭网盘账号状态</div>
-            <div class="setting-desc" id="settingAccountDesc">已配置登录状态。如需切换账号或重新登录，请使用右侧功能。</div>
-          </div>
-          <div style="display: flex; gap: 8px;">
-            <button class="btn-primary btn-sm" id="settingLoginBtn" onclick="openLoginModal()">📱 扫码登录 / 切换账号</button>
-            <button class="btn-danger btn-sm" id="settingLogoutBtn" onclick="confirmLogout()">🚪 退出登录</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="setting-card">
-        <div class="setting-card-title">📁 NAS 存储与默认下载目录</div>
-        <div class="setting-row">
-          <div>
-            <div style="font-weight: 600;">默认下载保存路径</div>
-            <div class="setting-desc">网盘文件直接下载保存到该 NAS 目录。系统将自动配置目录权限（<code>777</code> 完整读写权限），手机端与飞牛文件管理器可直接访问。</div>
-          </div>
-        </div>
-        <div style="display: flex; gap: 10px; margin-top: 10px;">
-          <input type="text" id="settingDownloadDirInput" readonly style="flex: 1; cursor: pointer;" onclick="openFolderPicker(onSettingFolderPicked)">
-          <button class="btn-accent" onclick="openFolderPicker(onSettingFolderPicked)">📂 浏览 NAS 目录</button>
-          <button class="btn-primary" onclick="saveDownloadDirSetting()">保存</button>
-        </div>
-      </div>
-
-      <div class="setting-card">
-        <div class="setting-card-title">⚡ 下载加速引擎</div>
-        <div class="setting-row">
-          <div>
-            <div style="font-weight: 600;">aria2c 多线程并发加速</div>
-            <div class="setting-desc">已检测并集成 NAS 宿主机 <code>/usr/bin/aria2c</code>，支持高达 16 线程单文件分片并发疾速下载。如环境异常则自动无缝降级为 Python 流式下载。</div>
-          </div>
-          <div>
-            <span class="status-badge status-success">已启用 (16 线程)</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="setting-card">
-        <div class="setting-card-title">🛡️ 权限与服务状态</div>
-        <div class="setting-row">
-          <div>
-            <div style="font-weight: 600;">系统后台服务 (guangyapan.service)</div>
-            <div class="setting-desc">以 root 身份驻留并管理 NAS 磁盘挂载点，端口 <code>8998</code>，开机自启动。</div>
-          </div>
-          <div>
-            <span class="status-badge status-success">运行中</span>
-          </div>
-        </div>
-        <div class="setting-row" style="margin-top: 14px;">
-          <div>
-            <div style="font-weight: 600;">fnOS 桌面快捷方式</div>
-            <div class="setting-desc">已注册至飞牛应用中心及桌面入口。</div>
-          </div>
-          <div>
-            <span class="status-badge status-success">已配置</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="setting-card">
-        <div class="setting-card-title">📖 关于</div>
-
-        <!-- 基础套件信息 -->
-        <div class="setting-row">
-          <div>
-            <div style="font-weight: 600; font-size: 14.5px;">光鸭网盘 fnOS 原生适配版</div>
-            <div class="setting-desc" style="margin-top: 4px;">
-              当前版本：<span id="aboutCurrentVersion" style="font-weight: 600; color: var(--text);">v1.0.5</span> · 开发者 / 维护者：<b>chaos</b>
+              <!-- View Switcher -->
+              <button class="btn-icon active" id="viewModeListBtn" onclick="setViewMode('list')" title="列表视图">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
+                  <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
+                </svg>
+              </button>
+              <button class="btn-icon" id="viewModeGridBtn" onclick="setViewMode('grid')" title="缩略图视图">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+                  <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+                </svg>
+              </button>
             </div>
           </div>
-          <div>
-            <span class="status-badge" style="background: rgba(255, 122, 0, 0.15); color: var(--accent); font-weight: 600;">chaos 适配版</span>
-          </div>
-        </div>
 
-        <!-- GitHub 开源仓库地址 -->
-        <div class="setting-row" style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);">
-          <div style="flex: 1; min-width: 0;">
-            <div style="font-weight: 600;">GitHub 开源主页</div>
-            <div class="setting-desc" style="margin-top: 4px;">
-              <a href="https://github.com/lawzhougc/guangyapan-fnos" target="_blank" rel="noopener noreferrer" style="color: var(--primary); text-decoration: underline; word-break: break-all;">
-                https://github.com/lawzhougc/guangyapan-fnos ↗
-              </a>
-            </div>
+          <!-- Breadcrumbs Bar -->
+          <div class="file-breadcrumbs" id="breadcrumbs">
+            <span class="crumb-item current">全部文件</span>
           </div>
-          <div style="flex-shrink: 0; margin-left: 12px;">
-            <a href="https://github.com/lawzhougc/guangyapan-fnos" target="_blank" rel="noopener noreferrer" class="btn-outline btn-sm" style="display: inline-flex; align-items: center; gap: 4px; text-decoration: none;">
-              ⭐ 前往仓库
-            </a>
-          </div>
-        </div>
 
-        <!-- 新版本更新提示 -->
-        <div class="setting-row" style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);">
-          <div style="flex: 1; min-width: 0;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <span style="font-weight: 600;">新版本更新提示</span>
-              <span id="updateStatusBadge" class="status-badge" style="background: var(--bg-hover); color: var(--text-muted); font-size: 11px;">未检查</span>
+          <!-- File Table -->
+          <div class="table-container" id="fileTableContainer">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 40px;"><input type="checkbox" id="tableSelectAllCb" onchange="toggleSelectAllTableFiles(this.checked)"></th>
+                  <th>名称</th>
+                  <th style="width: 130px;">大小</th>
+                  <th style="width: 170px;">修改时间</th>
+                  <th style="width: 260px; text-align: right; padding-right: 20px;">操作</th>
+                </tr>
+              </thead>
+              <tbody id="fileTableBody">
+                <tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 50px;">正在加载目录文件...</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Grid Container (when in grid view) -->
+          <div id="fileGridContainer" style="display: none; flex: 1; overflow-y: auto; padding: 18px; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));"></div>
+        </div>
+      </div>
+
+      <!-- VIEW 2: OFFLINE / CLOUD TASKS -->
+      <div class="content-view" id="view-offline">
+        <div class="official-card">
+          <div class="subtabs">
+            <div class="subtabs-left">
+              <button class="subtab-btn active" id="tabOfflineAll" onclick="filterOfflineTasks('all')">全部 (<span id="countOfflineAll">0</span>)</button>
+              <button class="subtab-btn" id="tabOfflineRunning" onclick="filterOfflineTasks('running')">进行中 (<span id="countOfflineRunning">0</span>)</button>
+              <button class="subtab-btn" id="tabOfflineDone" onclick="filterOfflineTasks('done')">已完成 (<span id="countOfflineDone">0</span>)</button>
+              <button class="subtab-btn" id="tabOfflineFailed" onclick="filterOfflineTasks('failed')">失败 (<span id="countOfflineFailed">0</span>)</button>
             </div>
-            <div class="setting-desc" id="updateStatusDesc" style="margin-top: 4px; line-height: 1.5;">
-              点击右侧按键检查是否有新版本发布。
+            <div style="display: flex; gap: 10px;">
+              <button class="btn-primary btn-sm" onclick="openCloudAddModal()">⚡ 新建云添加</button>
+              <button class="btn-outline btn-sm" onclick="loadCloudTasks()">🔄 全部刷新</button>
             </div>
           </div>
-          <div style="display: flex; gap: 8px; align-items: center; flex-shrink: 0; margin-left: 12px;">
-            <button class="btn-secondary btn-sm" id="checkUpdateBtn" onclick="checkForUpdates(true)">🔍 检查更新</button>
-            <a id="downloadUpdateBtn" href="https://github.com/lawzhougc/guangyapan-fnos/releases" target="_blank" rel="noopener noreferrer" class="btn-primary btn-sm" style="display: none; text-decoration: none;">⬇️ 前往下载</a>
+          <div class="task-list-container" id="offlineListContainer">
+            <div style="text-align: center; color: var(--text-muted); padding: 40px;">正在加载云端离线任务...</div>
           </div>
         </div>
       </div>
+
+      <!-- VIEW 3: TRANSFERS (NAS LOCAL DOWNLOADS) -->
+      <div class="content-view" id="view-transfers">
+        <div class="official-card">
+          <div class="subtabs">
+            <div class="subtabs-left">
+              <button class="subtab-btn active" id="tabDlActiveBtn" onclick="switchTransferTab('active')">正在下载到 NAS (<span id="countActiveDl">0</span>)</button>
+              <button class="subtab-btn" id="tabDlDoneBtn" onclick="switchTransferTab('done')">已下载完成 (<span id="countDoneDl">0</span>)</button>
+            </div>
+            <div>
+              <button class="btn-outline btn-sm" onclick="clearCompletedDownloads()">清空已完成记录</button>
+            </div>
+          </div>
+          <div class="task-list-container" id="transfersListContainer">
+            <div style="text-align: center; color: var(--text-muted); padding: 40px;">暂无下载任务</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIEW 4: RECYCLE BIN -->
+      <div class="content-view" id="view-trash">
+        <div class="official-card" style="display: flex; align-items: center; justify-content: center;">
+          <div class="empty-container">
+            <img src="/empty.png" class="empty-duck-img" alt="回收站">
+            <div class="empty-title">回收站就绪</div>
+            <div class="empty-sub">官方云端回收站已配置完成，可前往客户端进一步管理</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIEW 5: SETTINGS -->
+      <div class="content-view" id="view-settings">
+        <div class="official-card">
+          <div class="settings-grid">
+            <!-- Setting 1: Storage Dir -->
+            <div class="setting-card">
+              <div class="setting-card-title">📁 NAS 落地下载目录</div>
+              <div class="setting-card-desc">指定光鸭网盘文件下载至飞牛 NAS 的本地共享文件夹路径（穿透所有存储卷）。</div>
+              <div style="display: flex; gap: 8px; margin-top: 4px;">
+                <input type="text" class="form-input" id="settingDownloadDirInput" style="flex: 1;" placeholder="/vol1/1000/下载/光鸭网盘">
+                <button class="btn-secondary" onclick="openFolderPicker(onSettingFolderPicked, document.getElementById('settingDownloadDirInput').value)">浏览...</button>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
+                <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); cursor: pointer;">
+                  <input type="checkbox" id="setAsDefaultDirCheckbox" checked> 同时设为默认保存路径
+                </label>
+                <button class="btn-primary btn-sm" onclick="saveDownloadDirSetting()">保存配置</button>
+              </div>
+            </div>
+
+            <!-- Setting 2: Account Status -->
+            <div class="setting-card">
+              <div class="setting-card-title">🦆 光鸭网盘账号状态</div>
+              <div class="setting-card-desc" id="settingAccountDesc">已安全授权登入，Token 自动无感持久化续期。</div>
+              <div style="display: flex; gap: 10px; margin-top: 8px;">
+                <button class="btn-primary btn-sm" id="settingLoginBtn" onclick="openLoginModal()" style="display: none;">📱 扫码登录账号</button>
+                <button class="btn-danger btn-sm" id="settingLogoutBtn" onclick="confirmLogout()">🚪 退出当前账号</button>
+              </div>
+            </div>
+
+            <!-- Setting 3: About & Update Check -->
+            <div class="setting-card">
+              <div class="setting-card-title">ℹ️ 关于与更新检查</div>
+              <div class="setting-card-desc">
+                当前运行版本: <strong id="aboutCurrentVersion" style="color: var(--brand);">v1.0.6</strong> · 由 <strong>chaos</strong> 专为飞牛 fnOS 深度适配打造。
+              </div>
+              <div style="background: var(--bg-input); padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); font-size: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                  <span style="font-weight: 600;">GitHub 官方发布源:</span>
+                  <span class="fnos-badge" id="updateStatusBadge" style="background: var(--bg-card);">已是最新版</span>
+                </div>
+                <div id="updateStatusDesc" style="color: var(--text-muted); font-size: 11px;">点击下方按钮可实时检测 GitHub Releases 最新套件更新。</div>
+              </div>
+              <div style="display: flex; gap: 10px; margin-top: 4px;">
+                <button class="btn-secondary btn-sm" id="checkUpdateBtn" onclick="checkForUpdates(true)">🔄 检查最新版本</button>
+                <a href="https://github.com/lawzhougc/guangyapan-fnos/releases" target="_blank" class="btn-primary btn-sm" id="downloadUpdateBtn" style="display: none; text-decoration: none;">⬇️ 立即获取最新包</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 
-  <!-- Modal: Download Target Confirmation (Issue 2) -->
-  <div class="modal-backdrop" id="downloadConfirmModal">
+</div>
+
+<div class="modal-backdrop" id="downloadConfirmModal">
     <div class="modal" style="width: 540px;">
       <div class="modal-header">
         <span>⬇️ 下载文件到 NAS</span>
@@ -1886,7 +2076,123 @@ HTML_PAGE = """<!DOCTYPE html>
 
   <div id="toast"></div>
 
+  
+
+  <!-- Modal: Video Streaming Player (In-browser streaming) -->
+  <div class="modal-backdrop" id="videoPlayerModal" style="display: none;">
+    <div class="modal video-player-modal" style="width: 860px; max-width: 95vw; background: #000; border: 1px solid var(--border);">
+      <div class="modal-header" style="background: rgba(20,20,20,0.95); border-bottom: 1px solid #333; padding: 12px 18px;">
+        <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
+          <span style="font-size: 16px;">🎬</span>
+          <span class="modal-title" id="videoPlayerTitle" style="color: #fff; font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">视频播放</span>
+        </div>
+        <button class="btn-icon" onclick="closeVideoPlayer()" style="color: #bbb;">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 0; background: #000; display: flex; align-items: center; justify-content: center; position: relative;">
+        <video id="videoPlayerElement" controls autoplay style="width: 100%; max-height: 75vh; outline: none; background: #000; display: block;"></video>
+      </div>
+      <div class="modal-footer" style="background: rgba(20,20,20,0.95); border-top: 1px solid #333; padding: 10px 18px; display: flex; justify-content: space-between; align-items: center;">
+        <div style="font-size: 12px; color: #888;">
+          💡 支持画中画、倍速及全屏播放 · CDN 极速直链串流
+        </div>
+        <div style="display: flex; gap: 10px;">
+          <button class="btn-primary btn-sm" id="videoDownloadDirectBtn" onclick="downloadCurrentVideo()">⬇️ 下载到 NAS</button>
+          <button class="btn-secondary btn-sm" onclick="closeVideoPlayer()">关闭</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Component -->
+  <div id="toast"></div>
+
   <script>
+
+    // ================= Category Filtering & Video Player =================
+    let currentRawFiles = [];
+    let activeCategory = 'all';
+    let searchQuery = '';
+    let currentViewMode = 'list';
+    let currentPlayingFile = null;
+
+    const VIDEO_EXTS = ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'webm', 'ts', 'm4v', 'rmvb', 'iso'];
+    const IMG_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'heic'];
+    const DOC_EXTS = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'md', 'epub'];
+    const AUDIO_EXTS = ['mp3', 'flac', 'wav', 'aac', 'ogg', 'm4a', 'wma', 'ape'];
+    const INSTALL_EXTS = ['fpk', 'apk', 'exe', 'msi', 'dmg', 'pkg', 'deb', 'rpm', 'zip', 'rar', '7z', 'tar', 'gz'];
+
+    function isVideoFile(fileName) {
+      if (!fileName) return false;
+      const ext = fileName.split('.').pop().toLowerCase();
+      return VIDEO_EXTS.includes(ext);
+    }
+
+    function switchCategory(cat) {
+      activeCategory = cat;
+      document.querySelectorAll('.cat-tab-item').forEach(el => {
+        el.classList.toggle('active', el.dataset.cat === cat);
+      });
+      renderFileList();
+    }
+
+    function handleSearch(val) {
+      searchQuery = (val || '').trim().toLowerCase();
+      renderFileList();
+    }
+
+    function setViewMode(mode) {
+      currentViewMode = mode;
+      document.getElementById('viewModeListBtn')?.classList.toggle('active', mode === 'list');
+      document.getElementById('viewModeGridBtn')?.classList.toggle('active', mode === 'grid');
+      renderFileList();
+    }
+
+    async function playVideo(fileId, fileName) {
+      currentPlayingFile = { fileId, fileName };
+      showToast("正在解析视频直链...");
+      try {
+        const res = await fetch(`/api/download-url?fileId=${encodeURIComponent(fileId)}`);
+        const json = await res.json();
+        if (!json.url) {
+          showToast("获取播放直链失败: " + (json.msg || "未知错误"));
+          return;
+        }
+        const modal = document.getElementById("videoPlayerModal");
+        const video = document.getElementById("videoPlayerElement");
+        const title = document.getElementById("videoPlayerTitle");
+        title.innerText = fileName;
+        video.src = json.url;
+        video.currentTime = 0;
+        modal.style.display = "flex";
+        video.play().catch(() => {});
+      } catch (e) {
+        showToast("播放出错: " + e.message);
+      }
+    }
+
+    function closeVideoPlayer() {
+      const modal = document.getElementById("videoPlayerModal");
+      const video = document.getElementById("videoPlayerElement");
+      if (video) {
+        video.pause();
+        video.src = "";
+      }
+      if (modal) {
+        modal.style.display = "none";
+      }
+    }
+
+    function downloadCurrentVideo() {
+      if (currentPlayingFile) {
+        promptStartDownload(currentPlayingFile.fileId, currentPlayingFile.fileName);
+      }
+    }
+
+    function toggleSelectAllTableFiles(checked) {
+      document.querySelectorAll('.table-file-cb').forEach(cb => cb.checked = checked);
+    }
+
+
     // State
     let currentView = "files";
     let currentParentId = "";
@@ -1964,56 +2270,134 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     // ================= VIEW: FILES =================
+    
+    function renderFileList() {
+      const tbody = document.getElementById("fileTableBody");
+      const grid = document.getElementById("fileGridContainer");
+      const tableWrap = document.getElementById("fileTableContainer");
+
+      let filtered = currentRawFiles.slice();
+
+      // 1. Filter by category
+      if (activeCategory === 'video') {
+        filtered = filtered.filter(f => f.resType !== 2 && VIDEO_EXTS.includes((f.fileName || '').split('.').pop().toLowerCase()));
+      } else if (activeCategory === 'img') {
+        filtered = filtered.filter(f => f.resType !== 2 && IMG_EXTS.includes((f.fileName || '').split('.').pop().toLowerCase()));
+      } else if (activeCategory === 'doc') {
+        filtered = filtered.filter(f => f.resType !== 2 && DOC_EXTS.includes((f.fileName || '').split('.').pop().toLowerCase()));
+      } else if (activeCategory === 'audio') {
+        filtered = filtered.filter(f => f.resType !== 2 && AUDIO_EXTS.includes((f.fileName || '').split('.').pop().toLowerCase()));
+      } else if (activeCategory === 'installer') {
+        filtered = filtered.filter(f => f.resType !== 2 && INSTALL_EXTS.includes((f.fileName || '').split('.').pop().toLowerCase()));
+      } else if (activeCategory === 'recent') {
+        filtered.sort((a, b) => (b.utime || b.ctime || 0) - (a.utime || a.ctime || 0));
+      }
+
+      // 2. Filter by search query
+      if (searchQuery) {
+        filtered = filtered.filter(f => (f.fileName || '').toLowerCase().includes(searchQuery));
+      }
+
+      if (filtered.length === 0) {
+        const emptyHtml = `
+          <tr>
+            <td colspan="5" style="padding: 0; border: none;">
+              <div class="empty-container">
+                <img src="/empty.png" class="empty-duck-img" alt="暂无文件">
+                <div class="empty-title">暂无相关文件</div>
+                <div class="empty-sub">点击左上角「+ 上传」或「云添加」快速存储资源</div>
+              </div>
+            </td>
+          </tr>
+        `;
+        tbody.innerHTML = emptyHtml;
+        if (grid) grid.innerHTML = emptyHtml;
+        return;
+      }
+
+      if (currentViewMode === 'grid') {
+        if (tableWrap) tableWrap.style.display = 'none';
+        if (grid) {
+          grid.style.display = 'grid';
+          grid.innerHTML = '';
+          filtered.forEach(item => {
+            const isDir = (item.resType === 2);
+            const isVid = isVideoFile(item.fileName);
+            const icon = isDir ? "📁" : getFileIcon(item.fileName);
+            const card = document.createElement('div');
+            card.style.cssText = 'background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; text-align: center; transition: all 0.2s; position: relative;';
+            card.onmouseenter = () => card.style.borderColor = 'var(--brand)';
+            card.onmouseleave = () => card.style.borderColor = 'var(--border)';
+            card.onclick = () => {
+              if (isDir) navigateTo(item.fileId, item.fileName);
+              else if (isVid) playVideo(item.fileId, item.fileName);
+              else promptStartDownload(item.fileId, item.fileName);
+            };
+            card.innerHTML = `
+              <div style="font-size: 38px; margin-bottom: 8px;">${icon}</div>
+              <div style="font-size: 12px; font-weight: 500; color: var(--text-main); width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(item.fileName)}">${escapeHtml(item.fileName)}</div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">${isDir ? '文件夹' : formatBytes(item.fileSize)}</div>
+            `;
+            grid.appendChild(card);
+          });
+        }
+        return;
+      }
+
+      // Default Table View
+      if (tableWrap) tableWrap.style.display = 'block';
+      if (grid) grid.style.display = 'none';
+
+      tbody.innerHTML = "";
+      filtered.forEach(item => {
+        const tr = document.createElement("tr");
+        const isDir = (item.resType === 2);
+        const isVid = isVideoFile(item.fileName);
+        const icon = isDir ? "📁" : getFileIcon(item.fileName);
+
+        tr.innerHTML = `
+          <td><input type="checkbox" class="table-file-cb" data-fileid="${item.fileId}"></td>
+          <td>
+            <div class="file-name-cell" onclick="${isDir ? `navigateTo('${item.fileId}', '${escapeHtml(item.fileName)}')` : (isVid ? `playVideo('${item.fileId}', '${escapeHtml(item.fileName)}')` : `promptStartDownload('${item.fileId}', '${escapeHtml(item.fileName)}')`)}">
+              <span class="file-icon">${icon}</span>
+              <span class="file-name-text" title="${escapeHtml(item.fileName)}">${escapeHtml(item.fileName)}</span>
+            </div>
+          </td>
+          <td>${isDir ? '--' : formatBytes(item.fileSize)}</td>
+          <td>${formatDate(item.utime || item.ctime)}</td>
+          <td>
+            <div class="actions-cell" style="justify-content: flex-end;">
+              ${!isDir && isVid ? `<button class="btn-secondary btn-sm" onclick="playVideo('${item.fileId}', '${escapeHtml(item.fileName)}')">▶️ 播放</button>` : ''}
+              ${!isDir ? `<button class="btn-primary btn-sm" onclick="promptStartDownload('${item.fileId}', '${escapeHtml(item.fileName)}')">⬇️<span class="desktop-text"> 下载到NAS</span><span class="mobile-text"> 下载</span></button>` : ''}
+              ${!isDir ? `<button class="btn-outline btn-sm desktop-only-btn" onclick="copyLink('${item.fileId}')">🔗 直链</button>` : ''}
+              <button class="btn-danger btn-sm" onclick="deleteFile('${item.fileId}', '${escapeHtml(item.fileName)}')">🗑️</button>
+            </div>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
     async function loadFiles(parentId = currentParentId) {
       currentParentId = parentId;
       const tbody = document.getElementById("fileTableBody");
-      tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 50px;">正在加载目录文件...</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 50px;">正在加载目录文件...</td></tr>`;
 
       try {
         const res = await fetch(`/api/files?parentId=${encodeURIComponent(parentId)}`);
         const json = await res.json();
         if (json.code === 401 || (!isLoggedIn && (!json.list || json.list.length === 0))) {
-          tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; padding: 50px;"><div style="font-size: 15px; font-weight: 600; margin-bottom: 8px;">⚠️ 当前未登录光鸭网盘账号</div><div style="color: var(--text-muted); font-size: 13px; margin-bottom: 16px;">登录后即可查看网盘文件并开始疾速上传下载</div><button class="btn-primary" onclick="openLoginModal()">📱 立即扫码登录</button></td></tr>`;
+          tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; padding: 50px;"><div style="font-size: 15px; font-weight: 600; margin-bottom: 8px;">⚠️ 当前未登录光鸭网盘账号</div><div style="color: var(--text-muted); font-size: 13px; margin-bottom: 16px;">登录后即可查看网盘文件并开始疾速上传下载</div><button class="btn-primary" onclick="openLoginModal()">📱 立即扫码登录</button></td></tr>`;
           return;
         }
-        const list = json.list || [];
-
-        if (list.length === 0) {
-          tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 50px;">当前文件夹为空</td></tr>`;
-          return;
-        }
-
-        tbody.innerHTML = "";
-        list.forEach(item => {
-          const tr = document.createElement("tr");
-          const isDir = (item.resType === 2);
-          const icon = isDir ? "📁" : getFileIcon(item.fileName);
-
-          tr.innerHTML = `
-            <td>
-              <div class="file-name-cell" onclick="${isDir ? `navigateTo('${item.fileId}', '${escapeHtml(item.fileName)}')` : ''}">
-                <span class="file-icon">${icon}</span>
-                <span class="file-name-text" title="${escapeHtml(item.fileName)}">${escapeHtml(item.fileName)}</span>
-              </div>
-            </td>
-            <td>${isDir ? '--' : formatBytes(item.fileSize)}</td>
-            <td>${formatDate(item.utime || item.ctime)}</td>
-            <td>
-              <div class="actions-cell" style="justify-content: flex-end;">
-                ${!isDir ? `<button class="btn-primary btn-sm" onclick="promptStartDownload('${item.fileId}', '${escapeHtml(item.fileName)}')">⬇️<span class="desktop-text"> 下载到NAS</span><span class="mobile-text"> 下载</span></button>` : ''}
-                ${!isDir ? `<button class="btn-outline btn-sm desktop-only-btn" onclick="copyLink('${item.fileId}')">🔗 直链</button>` : ''}
-                <button class="btn-danger btn-sm" onclick="deleteFile('${item.fileId}', '${escapeHtml(item.fileName)}')">🗑️</button>
-              </div>
-            </td>
-          `;
-          tbody.appendChild(tr);
-        });
+        currentRawFiles = json.list || [];
+        renderFileList();
       } catch (e) {
-        tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #f87171; padding: 40px;">加载失败: ${e.message}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #f87171; padding: 40px;">加载失败: ${e.message}</td></tr>`;
       }
     }
 
-    function escapeHtml(str) {
+function escapeHtml(str) {
       if (!str) return "";
       return str.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
@@ -3836,10 +4220,12 @@ HTML_PAGE = """<!DOCTYPE html>
         loadCloudTasks();
       }
     }, 5000);
+  
   </script>
 </body>
-</html>
-"""
+</html>"""
+
+
 
 class RequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -3916,6 +4302,34 @@ class RequestHandler(BaseHTTPRequestHandler):
                     except Exception:
                         pass
             self.send_error(404, "qrcode.min.js not found")
+            return
+
+        elif path in ("/empty.png", "/brand_guangya_txt.svg", "/brand_logo_text.png"):
+            filename = os.path.basename(path)
+            candidates = [
+                os.path.join(os.path.dirname(__file__), filename),
+                os.path.join(os.path.dirname(os.path.dirname(__file__)), filename),
+                os.path.join(os.path.dirname(os.path.dirname(__file__)), "extracted_official", filename),
+                f"/var/apps/guangyapan/{filename}",
+                f"/var/apps/guangyapan/var/{filename}",
+                f"/var/apps/guangyapan/target/{filename}",
+            ] + glob.glob(f"/vol*/@appdata/guangyapan/{filename}")
+            for cand in candidates:
+                if os.path.exists(cand):
+                    try:
+                        with open(cand, "rb") as f:
+                            data = f.read()
+                        self.send_response(200)
+                        ct = "image/svg+xml" if cand.endswith(".svg") else "image/png"
+                        self.send_header("Content-Type", ct)
+                        self.send_header("Content-Length", str(len(data)))
+                        self.send_header("Cache-Control", "public, max-age=86400")
+                        self.end_headers()
+                        self.wfile.write(data)
+                        return
+                    except Exception:
+                        pass
+            self.send_error(404, f"{filename} Not Found")
             return
 
         elif path in ("/icon.png", "/icon-256.png"):

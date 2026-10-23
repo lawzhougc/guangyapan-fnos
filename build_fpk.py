@@ -15,7 +15,7 @@ def build_package(target_arch="x86_64"):
     arch_val = "arm64 aarch64" if is_arm else "x86_64"
 
     build_dir = os.path.join(BASE_DIR, f"build_fpk_tmp_{arch_tag}")
-    output_fpk = os.path.join(BASE_DIR, f"guangyapan-1.0.5-{arch_tag}.fpk")
+    output_fpk = os.path.join(BASE_DIR, f"guangyapan-1.0.6-{arch_tag}.fpk")
 
     if os.path.exists(build_dir):
         shutil.rmtree(build_dir)
@@ -53,6 +53,13 @@ def build_package(target_arch="x86_64"):
     if os.path.exists(os.path.join(BASE_DIR, "qrcode.min.js")):
         shutil.copy2(os.path.join(BASE_DIR, "qrcode.min.js"), os.path.join(app_payload_dir, "qrcode.min.js"))
         shutil.copy2(os.path.join(BASE_DIR, "qrcode.min.js"), os.path.join(app_payload_dir, "guangyapan", "qrcode.min.js"))
+
+    # Copy official brand SVGs & empty state illustration
+    for asset_name in ["empty.png", "brand_guangya_txt.svg", "brand_logo_text.png"]:
+        src_asset = os.path.join(BASE_DIR, "guangyapan", asset_name)
+        if os.path.exists(src_asset):
+            shutil.copy2(src_asset, os.path.join(app_payload_dir, asset_name))
+            shutil.copy2(src_asset, os.path.join(app_payload_dir, "guangyapan", asset_name))
 
     # Copy cli.py
     if os.path.exists(os.path.join(BASE_DIR, "cli.py")):
@@ -171,7 +178,7 @@ if __name__ == "__main__":
 
     # Manifest
     manifest_content = f"""appname="guangyapan"
-version="1.0.5"
+version="1.0.6"
 desc="光鸭网盘 fnOS 专用版，支持高速上传下载、磁链/BT云离线、NAS本地存储管理"
 arch="{arch_val}"
 platform="{platform_val}"
@@ -189,7 +196,7 @@ install_type="root"
 checkport="false"
 micro_app="false"
 disable_authorization_path="true"
-changelog="1.0.5: [{arch_tag.upper()} 架构 · chaos 适配版] 1. 深度复刻官方云添加解析与树状目录选择器，支持任意层级展开及新建目录；2. 离线任务管理支持暂停、继续及彻底删除（联动清理网盘文件）；3. 新增下载到NAS同名重复文件检测与智能重命名/覆盖选择；4. 优化暗色与亮色模式交互体验"
+changelog="1.0.6: [{arch_tag.upper()} 架构 · chaos 适配版] 1. 1:1 深度复刻光鸭官方网页版/客户端 UI 视觉体系（官方主色、72px 极简左侧导航轨、顶栏品牌标、官方呆萌鸭空状态插画）；2. 顶部原生分类标签（全部、最近、视频、图片、文档、音频、安装包）及实时搜索过滤；3. 内嵌在线视频直链极速流媒体播放器，支持免下载倍速与全屏观影；4. 优化超级会员身份标识与云盘容量胶囊展示"
 """
     with open(os.path.join(pkg_root, "manifest"), "w", encoding="utf-8", newline="\n") as f:
         f.write(manifest_content)
@@ -420,7 +427,7 @@ exit 0
     if is_arm:
         # Also create copies with common arm aliases for maximum compatibility
         for alias in ["aarch64", "arm"]:
-            alias_fpk = os.path.join(BASE_DIR, f"guangyapan-1.0.5-{alias}.fpk")
+            alias_fpk = os.path.join(BASE_DIR, f"guangyapan-1.0.6-{alias}.fpk")
             shutil.copy2(output_fpk, alias_fpk)
             print(f"Created alias package: {alias_fpk}")
 
