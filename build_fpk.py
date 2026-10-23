@@ -15,7 +15,7 @@ def build_package(target_arch="x86_64"):
     arch_val = "arm64 aarch64" if is_arm else "x86_64"
 
     build_dir = os.path.join(BASE_DIR, f"build_fpk_tmp_{arch_tag}")
-    output_fpk = os.path.join(BASE_DIR, f"guangyapan-1.0.5-{arch_tag}.fpk")
+    output_fpk = os.path.join(BASE_DIR, f"guangyapan-1.0.6-{arch_tag}.fpk")
 
     if os.path.exists(build_dir):
         shutil.rmtree(build_dir)
@@ -171,7 +171,7 @@ if __name__ == "__main__":
 
     # Manifest
     manifest_content = f"""appname="guangyapan"
-version="1.0.5"
+version="1.0.6"
 desc="光鸭网盘 fnOS 专用版，支持高速上传下载、磁链/BT云离线、NAS本地存储管理"
 arch="{arch_val}"
 platform="{platform_val}"
@@ -189,7 +189,7 @@ install_type="root"
 checkport="false"
 micro_app="false"
 disable_authorization_path="true"
-changelog="1.0.5: [{arch_tag.upper()} 架构 · chaos 适配版] 新建离线下载支持弹出文件选择窗口，支持勾选指定文件、一键全选/仅选视频；优化大文件下载与状态同步"
+changelog="1.0.6: [{arch_tag.upper()} 架构 · chaos 适配版] 深度复刻官方云添加任务解析界面；新增自定义保存到网盘具体目录功能（网盘目录选择器与新建目录）；支持分类过滤与容量剩余展示"
 """
     with open(os.path.join(pkg_root, "manifest"), "w", encoding="utf-8", newline="\n") as f:
         f.write(manifest_content)
@@ -420,7 +420,7 @@ exit 0
     if is_arm:
         # Also create copies with common arm aliases for maximum compatibility
         for alias in ["aarch64", "arm"]:
-            alias_fpk = os.path.join(BASE_DIR, f"guangyapan-1.0.5-{alias}.fpk")
+            alias_fpk = os.path.join(BASE_DIR, f"guangyapan-1.0.6-{alias}.fpk")
             shutil.copy2(output_fpk, alias_fpk)
             print(f"Created alias package: {alias_fpk}")
 

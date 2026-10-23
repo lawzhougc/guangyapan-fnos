@@ -10,7 +10,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from .client import GuangyapanClient
 from .downloader import FileDownloader, fix_permissions, format_size, format_speed
 
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 GITHUB_REPO_URL = "https://github.com/lawzhougc/guangyapan-fnos"
 _VERSION_CACHE = {"last_check": 0, "data": None}
 
@@ -214,9 +214,9 @@ HTML_PAGE = """<!DOCTYPE html>
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>光鸭网盘 · 飞牛系统 (fnOS) 客户端</title>
-  <link rel="icon" type="image/x-icon" href="/favicon.ico?v=1.0.5">
-  <link rel="icon" type="image/png" sizes="32x32" href="/icon.png?v=1.0.5">
-  <link rel="apple-touch-icon" href="/icon.png?v=1.0.5">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico?v=1.0.6">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icon.png?v=1.0.6">
+  <link rel="apple-touch-icon" href="/icon.png?v=1.0.6">
   <script src="/qrcode.min.js"></script>
   <style>
     :root {
@@ -732,6 +732,91 @@ HTML_PAGE = """<!DOCTYPE html>
       background: #ffffff04;
     }
 
+    /* Guangyapan Cloud Add & Folder Picker */
+    .btn-guangya-orange {
+      background: #ff6600;
+      color: #ffffff;
+      border: none;
+      border-radius: 9px;
+      padding: 9px 24px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(255, 102, 0, 0.28);
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      white-space: nowrap;
+    }
+    .btn-guangya-orange:hover {
+      background: #e65c00;
+      box-shadow: 0 4px 12px rgba(255, 102, 0, 0.38);
+    }
+    .btn-guangya-orange:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+    .cloud-dest-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: var(--bg-subtle);
+      cursor: pointer;
+      font-size: 12.5px;
+      transition: all 0.2s ease;
+      user-select: none;
+      flex: 1;
+      min-width: 0;
+    }
+    .cloud-dest-pill:hover {
+      border-color: #ff6600;
+      background: var(--bg-hover);
+    }
+    .cloud-file-row {
+      display: grid;
+      grid-template-columns: 1fr 65px 85px;
+      align-items: center;
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.15s ease;
+      user-select: none;
+    }
+    .cloud-file-row:hover {
+      background: var(--bg-hover);
+    }
+    .cloud-file-row:last-child {
+      border-bottom: none;
+    }
+    .cloud-picker-folder-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 9px 12px;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: background 0.15s ease;
+      font-size: 13px;
+      margin-bottom: 3px;
+      border: 1px solid transparent;
+      user-select: none;
+    }
+    .cloud-picker-folder-item:hover {
+      background: var(--bg-hover);
+    }
+    .cloud-picker-folder-item.selected {
+      background: rgba(255, 102, 0, 0.12);
+      border-color: rgba(255, 102, 0, 0.35);
+      color: var(--text);
+      font-weight: 600;
+    }
+
     /* Folder Selector Component */
     .fs-browser-list {
       background: var(--bg-input);
@@ -1076,7 +1161,7 @@ HTML_PAGE = """<!DOCTYPE html>
   <!-- Left Sidebar (Windows/fnOS Style) -->
   <aside id="sidebar">
     <div class="brand-box">
-      <img src="/icon.png?v=1.0.5" class="brand-icon" style="width:34px;height:34px;border-radius:8px;object-fit:cover;flex-shrink:0;" alt="光鸭网盘">
+      <img src="/icon.png?v=1.0.6" class="brand-icon" style="width:34px;height:34px;border-radius:8px;object-fit:cover;flex-shrink:0;" alt="光鸭网盘">
       <div>
         <div class="brand-name">光鸭网盘 <span class="brand-badge">fnOS</span></div>
         <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">飞牛 NAS 客户端 · by chaos</div>
@@ -1140,7 +1225,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <header>
       <div class="mobile-header-top">
         <div class="mobile-brand">
-          <img src="/icon.png?v=1.0.5" class="mobile-brand-img" style="width:26px;height:26px;border-radius:6px;object-fit:cover;flex-shrink:0;" alt="光鸭网盘">
+          <img src="/icon.png?v=1.0.6" class="mobile-brand-img" style="width:26px;height:26px;border-radius:6px;object-fit:cover;flex-shrink:0;" alt="光鸭网盘">
           <span>光鸭网盘 <span class="brand-badge" style="font-size:10px;">by chaos</span></span>
         </div>
         <div class="mobile-header-tools">
@@ -1311,7 +1396,7 @@ HTML_PAGE = """<!DOCTYPE html>
           <div>
             <div style="font-weight: 600; font-size: 14.5px;">光鸭网盘 fnOS 原生适配版</div>
             <div class="setting-desc" style="margin-top: 4px;">
-              当前版本：<span id="aboutCurrentVersion" style="font-weight: 600; color: var(--text);">v1.0.5</span> · 开发者 / 维护者：<b>chaos</b>
+              当前版本：<span id="aboutCurrentVersion" style="font-weight: 600; color: var(--text);">v1.0.6</span> · 开发者 / 维护者：<b>chaos</b>
             </div>
           </div>
           <div>
@@ -1434,11 +1519,17 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- Modal: Cloud Add (Magnet & Torrent with File Selection Window) -->
+  <!-- Modal: Cloud Add (Magnet & Torrent with Guangyapan Official Replica Layout) -->
   <div class="modal-backdrop" id="cloudAddModal">
-    <div class="modal" style="width: 620px; max-width: 95vw;">
-      <div class="modal-header">
-        <span id="cloudAddModalTitle">⚡ 云离线下载 (磁力 / BT)</span>
+    <div class="modal" style="width: 660px; max-width: 95vw; border-radius: 16px; padding: 22px;">
+      <div class="modal-header" style="padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--border-subtle);">
+        <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px;">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="color: #ff6600;">
+            <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
+            <polyline points="12 13 12 9 10 11"/>
+          </svg>
+          <span id="cloudAddModalTitle">云添加任务解析</span>
+        </div>
         <button class="close-btn" onclick="closeModal('cloudAddModal')">&times;</button>
       </div>
 
@@ -1463,46 +1554,114 @@ HTML_PAGE = """<!DOCTYPE html>
           </div>
         </div>
 
-        <div class="modal-footer" style="margin-top: 18px;">
+        <div class="modal-footer" style="margin-top: 18px; display: flex; justify-content: flex-end; gap: 10px;">
           <button class="btn-secondary" onclick="closeModal('cloudAddModal')">取消</button>
-          <button class="btn-primary" id="cloudAddNextBtn" onclick="resolveCloudAdd()">下一步：解析文件列表 ➔</button>
+          <button class="btn-guangya-orange" id="cloudAddNextBtn" onclick="resolveCloudAdd()">下一步：解析任务 ➔</button>
         </div>
       </div>
 
-      <!-- Step 2: Download File Selection Window (弹出的下载文件选择窗口) -->
+      <!-- Step 2: Download File Selection & Destination Window (参考光鸭网页版窗口) -->
       <div id="cloudAddStep2" style="display: none;">
-        <div style="margin-bottom: 12px;">
-          <div style="font-size: 13px; font-weight: 600; margin-bottom: 5px;">任务名称：</div>
-          <input type="text" id="cloudAddTitleInput" style="width: 100%; box-sizing: border-box; font-size: 13px; padding: 7px 10px;">
-        </div>
-
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 12.5px; color: var(--text-muted);">
-          <div>
-            保存至网盘目录：<span id="cloudAddTargetFolder" style="font-weight: 600; color: var(--text);">/</span>
+        <!-- Top Torrent Info Card -->
+        <div style="border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; margin-bottom: 12px; background: var(--bg-card);">
+          <div id="cloudAddTypeBadge" style="width: 44px; height: 44px; border-radius: 9px; background: #22c55e; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px; flex-shrink: 0; box-shadow: 0 2px 6px rgba(34, 197, 94, 0.25);">
+            BT
           </div>
-          <div id="cloudAddTotalTorrentSize" style="font-family: monospace; color: var(--text-dim);">--</div>
-        </div>
-
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
-          <div style="font-size: 13px; font-weight: 600; color: var(--text);">
-            勾选要下载的文件：
-            <span id="cloudAddSelectedSummary" style="font-size: 12px; color: var(--primary); font-weight: 600; margin-left: 4px;"></span>
-          </div>
-          <div style="display: flex; gap: 6px;">
-            <button class="btn-outline btn-sm" style="padding: 2px 8px; font-size: 11.5px;" onclick="setAllCloudFiles(true)">全选</button>
-            <button class="btn-outline btn-sm" style="padding: 2px 8px; font-size: 11.5px;" onclick="setAllCloudFiles(false)">全不选</button>
-            <button class="btn-outline btn-sm" style="padding: 2px 8px; font-size: 11.5px;" onclick="selectVideoCloudFilesOnly()">仅选视频</button>
+          <div style="flex: 1; min-width: 0;">
+            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+              <input type="text" id="cloudAddTitleInput" style="font-weight: 600; font-size: 13.5px; border: 1px solid transparent; background: transparent; padding: 2px 6px; border-radius: 5px; color: var(--text); width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; outline: none; transition: all 0.15s;" title="点击可直接修改任务名称">
+              <button type="button" onclick="focusTitleInput()" style="background: none; border: none; cursor: pointer; color: var(--text-dim); padding: 2px; font-size: 14px; flex-shrink: 0;" title="编辑任务名称">✏️</button>
+            </div>
+            <div style="font-size: 12px; color: var(--text-muted); display: flex; gap: 16px;">
+              <span id="cloudAddFileCountDisplay">共 0 个文件</span>
+              <span id="cloudAddTotalSizeDisplay">0 B</span>
+            </div>
           </div>
         </div>
 
-        <!-- Scrollable Files Container -->
-        <div id="cloudAddFileListContainer" style="max-height: 260px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-subtle);">
+        <!-- Filter Bar -->
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 4px 2px 10px 2px; font-size: 13px; color: var(--text);">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <input type="checkbox" id="cloudAddSelectAllCb" onchange="toggleSelectAllFiles(this.checked)" style="width: 16px; height: 16px; accent-color: #ff6600; cursor: pointer;">
+            <label for="cloudAddSelectAllCb" style="cursor: pointer; font-weight: 500;">全选</label>
+            <span id="cloudAddSelectedCountText" style="color: var(--text-muted); font-size: 12.5px; margin-left: 2px;">已选 0 项</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 14px;">
+            <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 13px;">
+              <input type="checkbox" id="filterVideoCb" onchange="toggleFilterCategory('video', this.checked)" style="width: 15px; height: 15px; accent-color: #ff6600; cursor: pointer;">
+              <span>视频</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 13px;">
+              <input type="checkbox" id="filterOtherCb" onchange="toggleFilterCategory('other', this.checked)" style="width: 15px; height: 15px; accent-color: #ff6600; cursor: pointer;">
+              <span>其他</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- File Table -->
+        <div style="border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--bg-card); margin-bottom: 14px;">
+          <div style="display: grid; grid-template-columns: 1fr 65px 85px; padding: 8px 12px; font-size: 12px; color: var(--text-dim); background: var(--bg-subtle); border-bottom: 1px solid var(--border-subtle);">
+            <div>文件名</div>
+            <div style="text-align: center;">格式</div>
+            <div style="text-align: right;">大小</div>
+          </div>
+          <div id="cloudAddFileListContainer" style="max-height: 250px; overflow-y: auto;">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+
+        <!-- Bottom Bar: Destination Picker & Action Button -->
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
+          <div class="cloud-dest-pill" id="cloudAddTargetFolderBtn" onclick="openCloudFolderPickerModal()" title="点击更改保存到网盘的具体文件夹位置">
+            <span style="color: var(--text-dim); flex-shrink: 0;">添加到:</span>
+            <span id="cloudAddTargetFolderDisplay" style="font-weight: 500; color: var(--text); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">全部文件/来自: 云添加</span>
+            <span style="color: var(--text-dim); flex-shrink: 0;">剩余: <span id="cloudAddQuotaDisplay">--</span></span>
+            <span style="font-size: 15px; flex-shrink: 0;">📁</span>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 10px; margin-left: auto;">
+            <button class="btn-secondary" onclick="backToCloudAddStep1()" style="padding: 9px 14px; font-size: 13px;">⬅️ 返回修改</button>
+            <button class="btn-guangya-orange" id="confirmCloudAddBtn" onclick="confirmSubmitCloudAdd()">立即添加</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Cloud Drive Destination Folder Picker (选择下载到网盘具体位置) -->
+  <div class="modal-backdrop" id="cloudFolderPickerModal" style="z-index: 1050;">
+    <div class="modal" style="width: 540px; max-width: 95vw; border-radius: 14px; padding: 22px;">
+      <div class="modal-header" style="border-bottom: 1px solid var(--border-subtle); padding-bottom: 12px; margin-bottom: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px;">
+          <span>📁</span>
+          <span>选择保存到网盘的位置</span>
+        </div>
+        <button class="close-btn" onclick="closeModal('cloudFolderPickerModal')">&times;</button>
+      </div>
+
+      <!-- Cloud Breadcrumb & Mkdir -->
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 8px;">
+        <div id="cloudPickerBreadcrumbs" style="display: flex; align-items: center; gap: 4px; font-size: 12.5px; flex: 1; overflow-x: auto; white-space: nowrap; padding: 4px 0;">
           <!-- Populated by JS -->
         </div>
+        <button class="btn-outline btn-sm" onclick="promptCreateCloudPickerFolder()" style="padding: 4px 10px; font-size: 12px; flex-shrink: 0;">
+          + 新建文件夹
+        </button>
+      </div>
 
-        <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px;">
-          <button class="btn-secondary" onclick="backToCloudAddStep1()">⬅️ 返回修改</button>
-          <button class="btn-primary" id="confirmCloudAddBtn" onclick="confirmSubmitCloudAdd()">🚀 确定添加离线下载</button>
+      <!-- Cloud Folders List Container -->
+      <div id="cloudPickerFolderListContainer" style="max-height: 270px; min-height: 180px; overflow-y: auto; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-subtle); padding: 4px;">
+        <!-- Populated by JS -->
+      </div>
+
+      <!-- Cloud Picker Footer -->
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+        <div style="font-size: 12.5px; color: var(--text-dim); max-width: 270px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+          当前选择: <span id="cloudPickerSelectedPathText" style="font-weight: 600; color: #ff6600;">全部文件</span>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn-secondary btn-sm" onclick="closeModal('cloudFolderPickerModal')">取消</button>
+          <button class="btn-guangya-orange btn-sm" style="padding: 6px 16px;" onclick="confirmCloudFolderPicker()">✅ 确定选择该目录</button>
         </div>
       </div>
     </div>
@@ -1545,7 +1704,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <div class="modal" style="width: 460px; max-width: 95vw; overflow-y: auto;">
       <div class="modal-header">
         <div style="display: flex; align-items: center; gap: 8px;">
-          <img src="/icon.png?v=1.0.5" style="width: 26px; height: 26px; object-fit: contain; border-radius: 6px;">
+          <img src="/icon.png?v=1.0.6" style="width: 26px; height: 26px; object-fit: contain; border-radius: 6px;">
           <span>光鸭网盘 · 账号登录</span>
         </div>
         <button class="close-btn" onclick="closeLoginModal()">&times;</button>
@@ -2427,8 +2586,56 @@ HTML_PAGE = """<!DOCTYPE html>
       }
     }
 
-    // ================= CLOUD ADD (MAGNET / TORRENT) =================
+    // ================= CLOUD ADD (MAGNET / TORRENT) & DESTINATION PICKER =================
     let resolvedCloudData = null;
+    let cloudAddTargetParentId = "";
+    let cloudAddTargetFolderPath = "全部文件";
+    let cloudUserQuotaFreeStr = "--";
+
+    let cloudPickerCurrentParentId = "";
+    let cloudPickerBreadcrumbs = [{ id: "", name: "全部文件" }];
+    let cloudPickerSelectedId = "";
+    let cloudPickerSelectedPath = "全部文件";
+
+    async function initCloudAddDestination() {
+      // 1. Fetch quota
+      try {
+        const uRes = await fetch("/api/user");
+        const uData = await uRes.json();
+        if (uData.assets) {
+          const free = (uData.assets.totalSpaceSize || 0) - (uData.assets.usedSpaceSize || 0);
+          cloudUserQuotaFreeStr = formatBytes(free);
+          const qEl = document.getElementById("cloudAddQuotaDisplay");
+          if (qEl) qEl.innerText = cloudUserQuotaFreeStr;
+        }
+      } catch (e) {}
+
+      // 2. Discover default folder (prefer current folder if navigated inside, else look for "来自：云添加")
+      if (currentParentId && currentParentId !== "") {
+        cloudAddTargetParentId = currentParentId;
+        cloudAddTargetFolderPath = (breadcrumbStack && breadcrumbStack.length > 0) ? breadcrumbStack.map(b => b.name).join("/") : "全部文件";
+      } else {
+        try {
+          const res = await fetch("/api/files?parentId=");
+          const data = await res.json();
+          const list = data.list || [];
+          const cloudFolder = list.find(item => item.resType === 2 && (item.fileName.includes("来自：云添加") || item.fileName.includes("来自: 云添加") || item.fileName === "云添加"));
+          if (cloudFolder) {
+            cloudAddTargetParentId = cloudFolder.fileId;
+            cloudAddTargetFolderPath = "全部文件/" + cloudFolder.fileName;
+          } else {
+            cloudAddTargetParentId = "";
+            cloudAddTargetFolderPath = "全部文件";
+          }
+        } catch (e) {
+          cloudAddTargetParentId = "";
+          cloudAddTargetFolderPath = "全部文件";
+        }
+      }
+
+      const tfEl = document.getElementById("cloudAddTargetFolderDisplay");
+      if (tfEl) tfEl.innerText = cloudAddTargetFolderPath;
+    }
 
     function openCloudAddModal() {
       resolvedCloudData = null;
@@ -2442,9 +2649,10 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById("cloudAddStep2").style.display = "none";
       const nextBtn = document.getElementById("cloudAddNextBtn");
       nextBtn.disabled = false;
-      nextBtn.innerText = "下一步：解析文件列表 ➔";
+      nextBtn.innerText = "下一步：解析任务 ➔";
       
       switchCloudTab('magnet');
+      initCloudAddDestination();
       openModal("cloudAddModal");
     }
 
@@ -2494,12 +2702,12 @@ HTML_PAGE = """<!DOCTYPE html>
           } else {
             alert("解析失败: " + (d.error || JSON.stringify(d)));
             nextBtn.disabled = false;
-            nextBtn.innerText = "下一步：解析文件列表 ➔";
+            nextBtn.innerText = "下一步：解析任务 ➔";
           }
         } catch (e) {
           alert("网络或解析异常: " + e.message);
           nextBtn.disabled = false;
-          nextBtn.innerText = "下一步：解析文件列表 ➔";
+          nextBtn.innerText = "下一步：解析任务 ➔";
         }
       } else {
         if (!selectedTorrentFile) {
@@ -2522,12 +2730,12 @@ HTML_PAGE = """<!DOCTYPE html>
           } else {
             alert("解析种子失败: " + (d.error || JSON.stringify(d)));
             nextBtn.disabled = false;
-            nextBtn.innerText = "下一步：解析文件列表 ➔";
+            nextBtn.innerText = "下一步：解析任务 ➔";
           }
         } catch (e) {
           alert("上传或解析异常: " + e.message);
           nextBtn.disabled = false;
-          nextBtn.innerText = "下一步：解析文件列表 ➔";
+          nextBtn.innerText = "下一步：解析任务 ➔";
         }
       }
     }
@@ -2536,15 +2744,30 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById("cloudAddStep1").style.display = "none";
       document.getElementById("cloudAddStep2").style.display = "block";
       
-      document.getElementById("cloudAddTitleInput").value = data.title || "";
-      const folderName = (breadcrumbStack && breadcrumbStack.length > 0) ? breadcrumbStack.map(b => b.name).join("/") : "/";
-      document.getElementById("cloudAddTargetFolder").innerText = folderName || "/";
-      document.getElementById("cloudAddTotalTorrentSize").innerText = "总大小: " + (data.formattedTotalSize || formatBytes(data.totalSize || 0));
+      // Title & Badge
+      const titleInput = document.getElementById("cloudAddTitleInput");
+      titleInput.value = data.title || "";
+      titleInput.style.border = "1px solid transparent";
+      titleInput.style.background = "transparent";
+
+      const typeBadge = document.getElementById("cloudAddTypeBadge");
+      if (typeBadge) {
+        typeBadge.innerText = (data.type === 'url') ? 'URL' : 'BT';
+        typeBadge.style.background = (data.type === 'url') ? '#3b82f6' : '#22c55e';
+      }
+
+      const files = data.files || [];
+      document.getElementById("cloudAddFileCountDisplay").innerText = `共 ${files.length} 个文件`;
+      document.getElementById("cloudAddTotalSizeDisplay").innerText = data.formattedTotalSize || formatBytes(data.totalSize || 0);
+
+      document.getElementById("cloudAddTargetFolderDisplay").innerText = cloudAddTargetFolderPath;
+      document.getElementById("cloudAddQuotaDisplay").innerText = cloudUserQuotaFreeStr;
 
       const container = document.getElementById("cloudAddFileListContainer");
       container.innerHTML = "";
 
-      const files = data.files || [];
+      const videoExts = ["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "ts", "m4v", "iso", "rmvb"];
+
       if (files.length === 0) {
         container.innerHTML = `
           <div style="padding: 28px 16px; text-align: center; color: var(--text-muted); font-size: 13px;">
@@ -2555,27 +2778,31 @@ HTML_PAGE = """<!DOCTYPE html>
         files.forEach((f, idx) => {
           const row = document.createElement("div");
           row.className = "cloud-file-row";
-          row.style.cssText = "display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 13px; gap: 10px; cursor: pointer; user-select: none;";
           if (idx === files.length - 1) {
             row.style.borderBottom = "none";
           }
 
           const ext = (f.fileName || "").split(".").pop().toLowerCase();
-          let icon = "📄";
-          if (["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "ts", "m4v", "iso", "rmvb"].includes(ext)) icon = "🎬";
-          else if (["mp3", "flac", "wav", "aac", "ogg", "m4a"].includes(ext)) icon = "🎵";
-          else if (["zip", "rar", "7z", "tar", "gz"].includes(ext)) icon = "📦";
-          else if (["jpg", "jpeg", "png", "gif", "webp", "bmp"].includes(ext)) icon = "🖼️";
-          else if (["nfo", "txt", "md"].includes(ext)) icon = "📝";
-          else if (["srt", "ass", "vtt", "sub"].includes(ext)) icon = "💬";
+          const isVideo = videoExts.includes(ext);
+
+          // Icon styling matching official web app
+          let iconHtml = "";
+          if (isVideo) {
+            iconHtml = `<span style="width: 22px; height: 22px; border-radius: 5px; background: #6366f1; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; flex-shrink: 0;">▶</span>`;
+          } else if (["txt", "nfo", "md", "srt", "ass", "log", "sub"].includes(ext)) {
+            iconHtml = `<span style="width: 22px; height: 22px; border-radius: 5px; background: #93c5fd; color: #1e3a8a; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; flex-shrink: 0;">≡</span>`;
+          } else {
+            iconHtml = `<span style="width: 22px; height: 22px; border-radius: 5px; background: #e2e8f0; color: #64748b; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; flex-shrink: 0;">?</span>`;
+          }
 
           row.innerHTML = `
-            <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
-              <input type="checkbox" class="cloud-file-cb" data-index="${f.fileIndex}" data-size="${f.fileSize || 0}" data-ext="${ext}" ${f.selected ? 'checked' : ''} style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--primary);">
-              <span style="font-size: 16px; flex-shrink: 0;">${icon}</span>
-              <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; color: var(--text);" title="${escapeHtml(f.fileName)}">${escapeHtml(f.fileName)}</span>
+            <div style="display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden;">
+              <input type="checkbox" class="cloud-file-cb" data-index="${f.fileIndex}" data-size="${f.fileSize || 0}" data-ext="${ext}" data-video="${isVideo ? '1' : '0'}" ${f.selected ? 'checked' : ''} style="cursor: pointer; width: 16px; height: 16px; accent-color: #ff6600; flex-shrink: 0;">
+              ${iconHtml}
+              <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-size: 13px;" title="${escapeHtml(f.fileName)}">${escapeHtml(f.fileName)}</span>
             </div>
-            <div style="font-family: monospace; font-size: 12px; color: var(--text-dim); flex-shrink: 0;">${escapeHtml(f.formattedSize || formatBytes(f.fileSize || 0))}</div>
+            <div style="text-align: center; color: var(--text-dim); font-size: 12px; font-family: monospace;">${escapeHtml(ext || '-')}</div>
+            <div style="text-align: right; color: var(--text-dim); font-size: 12.5px; font-family: monospace;">${escapeHtml(f.formattedSize || formatBytes(f.fileSize || 0))}</div>
           `;
 
           row.onclick = (e) => {
@@ -2583,57 +2810,106 @@ HTML_PAGE = """<!DOCTYPE html>
               const cb = row.querySelector('.cloud-file-cb');
               cb.checked = !cb.checked;
             }
-            updateCloudFileSummary();
+            updateFilterStateAndSummary();
           };
           const cb = row.querySelector('.cloud-file-cb');
-          cb.onchange = () => updateCloudFileSummary();
+          cb.onchange = () => updateFilterStateAndSummary();
 
           container.appendChild(row);
         });
       }
 
-      updateCloudFileSummary();
+      updateFilterStateAndSummary();
     }
 
-    function updateCloudFileSummary() {
-      const cbs = Array.from(document.querySelectorAll(".cloud-file-cb"));
-      const total = cbs.length;
-      const confirmBtn = document.getElementById("confirmCloudAddBtn");
-      if (total === 0) {
-        document.getElementById("cloudAddSelectedSummary").innerText = "";
-        confirmBtn.disabled = false;
-        confirmBtn.innerText = "🚀 确定添加离线下载";
-        return;
-      }
-      const checked = cbs.filter(cb => cb.checked);
-      let totalBytes = 0;
-      checked.forEach(cb => {
-        totalBytes += parseInt(cb.dataset.size || "0", 10);
-      });
-      document.getElementById("cloudAddSelectedSummary").innerText = `已勾选 ${checked.length} / ${total} 项 (共 ${formatBytes(totalBytes)})`;
-      if (checked.length === 0) {
-        confirmBtn.disabled = true;
-        confirmBtn.innerText = "请至少勾选 1 个文件";
-      } else {
-        confirmBtn.disabled = false;
-        confirmBtn.innerText = `🚀 确定添加离线下载 (已选 ${checked.length} 项)`;
-      }
+    function focusTitleInput() {
+      const inp = document.getElementById("cloudAddTitleInput");
+      inp.focus();
+      inp.select();
+      inp.style.border = "1px solid #ff6600";
+      inp.style.background = "var(--bg-subtle)";
+      inp.onblur = () => {
+        inp.style.border = "1px solid transparent";
+        inp.style.background = "transparent";
+      };
     }
 
-    function setAllCloudFiles(checked) {
+    function toggleSelectAllFiles(checked) {
       const cbs = document.querySelectorAll(".cloud-file-cb");
       cbs.forEach(cb => cb.checked = checked);
-      updateCloudFileSummary();
+      updateFilterStateAndSummary();
     }
 
-    function selectVideoCloudFilesOnly() {
-      const videoExts = ["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "ts", "m4v", "iso", "rmvb"];
-      const cbs = document.querySelectorAll(".cloud-file-cb");
-      cbs.forEach(cb => {
-        const ext = (cb.dataset.ext || "").toLowerCase();
-        cb.checked = videoExts.includes(ext);
-      });
-      updateCloudFileSummary();
+    function toggleFilterCategory(cat, checked) {
+      if (cat === 'video') {
+        document.querySelectorAll('.cloud-file-cb[data-video="1"]').forEach(cb => cb.checked = checked);
+      } else {
+        document.querySelectorAll('.cloud-file-cb[data-video="0"]').forEach(cb => cb.checked = checked);
+      }
+      updateFilterStateAndSummary();
+    }
+
+    function updateFilterStateAndSummary() {
+      const allCbs = Array.from(document.querySelectorAll(".cloud-file-cb"));
+      const checkedCbs = allCbs.filter(cb => cb.checked);
+      const videoCbs = allCbs.filter(cb => cb.dataset.video === "1");
+      const checkedVideoCbs = videoCbs.filter(cb => cb.checked);
+      const otherCbs = allCbs.filter(cb => cb.dataset.video === "0");
+      const checkedOtherCbs = otherCbs.filter(cb => cb.checked);
+
+      // 1. Select All Checkbox
+      const allCb = document.getElementById("cloudAddSelectAllCb");
+      if (allCbs.length > 0 && checkedCbs.length === allCbs.length) {
+        allCb.checked = true;
+        allCb.indeterminate = false;
+      } else if (checkedCbs.length > 0) {
+        allCb.checked = false;
+        allCb.indeterminate = true;
+      } else {
+        allCb.checked = false;
+        allCb.indeterminate = false;
+      }
+
+      // 2. Video filter checkbox
+      const vCb = document.getElementById("filterVideoCb");
+      if (videoCbs.length === 0) {
+        vCb.checked = false; vCb.indeterminate = false; vCb.disabled = true;
+      } else if (checkedVideoCbs.length === videoCbs.length) {
+        vCb.checked = true; vCb.indeterminate = false; vCb.disabled = false;
+      } else if (checkedVideoCbs.length > 0) {
+        vCb.checked = false; vCb.indeterminate = true; vCb.disabled = false;
+      } else if (checkedVideoCbs.length === 0) {
+        vCb.checked = false; vCb.indeterminate = false; vCb.disabled = false;
+      } else {
+        vCb.checked = false; vCb.indeterminate = true; vCb.disabled = false;
+      }
+
+      // 3. Other filter checkbox
+      const oCb = document.getElementById("filterOtherCb");
+      if (otherCbs.length === 0) {
+        oCb.checked = false; oCb.indeterminate = false; oCb.disabled = true;
+      } else if (checkedOtherCbs.length === otherCbs.length) {
+        oCb.checked = true; oCb.indeterminate = false; oCb.disabled = false;
+      } else if (checkedOtherCbs.length > 0) {
+        oCb.checked = false; oCb.indeterminate = true; oCb.disabled = false;
+      } else if (checkedOtherCbs.length === 0) {
+        oCb.checked = false; oCb.indeterminate = false; oCb.disabled = false;
+      } else {
+        oCb.checked = false; oCb.indeterminate = true; oCb.disabled = false;
+      }
+
+      // 4. Counter text
+      document.getElementById("cloudAddSelectedCountText").innerText = `已选${checkedCbs.length}项`;
+
+      // 5. Submit button
+      const confirmBtn = document.getElementById("confirmCloudAddBtn");
+      if (allCbs.length > 0 && checkedCbs.length === 0) {
+        confirmBtn.disabled = true;
+        confirmBtn.innerText = "请至少勾选 1 项";
+      } else {
+        confirmBtn.disabled = false;
+        confirmBtn.innerText = "立即添加";
+      }
     }
 
     function backToCloudAddStep1() {
@@ -2641,7 +2917,140 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById("cloudAddStep2").style.display = "none";
       const nextBtn = document.getElementById("cloudAddNextBtn");
       nextBtn.disabled = false;
-      nextBtn.innerText = "下一步：解析文件列表 ➔";
+      nextBtn.innerText = "下一步：解析任务 ➔";
+    }
+
+    // ================= CLOUD DRIVE FOLDER PICKER =================
+    function openCloudFolderPickerModal() {
+      cloudPickerSelectedId = cloudAddTargetParentId;
+      cloudPickerSelectedPath = cloudAddTargetFolderPath;
+      document.getElementById("cloudPickerSelectedPathText").innerText = cloudPickerSelectedPath;
+      loadCloudPickerFolder(cloudAddTargetParentId || "");
+      openModal("cloudFolderPickerModal");
+    }
+
+    async function loadCloudPickerFolder(parentId, folderName = null) {
+      if (!parentId || parentId === "") {
+        cloudPickerBreadcrumbs = [{ id: "", name: "全部文件" }];
+      } else if (folderName) {
+        const existingIdx = cloudPickerBreadcrumbs.findIndex(b => b.id === parentId);
+        if (existingIdx !== -1) {
+          cloudPickerBreadcrumbs = cloudPickerBreadcrumbs.slice(0, existingIdx + 1);
+        } else {
+          cloudPickerBreadcrumbs.push({ id: parentId, name: folderName });
+        }
+      }
+
+      cloudPickerCurrentParentId = parentId;
+      const currentPathStr = cloudPickerBreadcrumbs.map(b => b.name).join("/");
+
+      // Render breadcrumbs
+      const bcContainer = document.getElementById("cloudPickerBreadcrumbs");
+      bcContainer.innerHTML = cloudPickerBreadcrumbs.map((b, idx) => {
+        const isLast = (idx === cloudPickerBreadcrumbs.length - 1);
+        if (isLast) {
+          return `<span style="font-weight: 600; color: var(--text);">${escapeHtml(b.name)}</span>`;
+        } else {
+          return `<span style="color: var(--primary); cursor: pointer;" onclick="loadCloudPickerFolder('${b.id}', '${escapeHtml(b.name)}')">${escapeHtml(b.name)}</span><span style="color: var(--text-dim); margin: 0 4px;">/</span>`;
+        }
+      }).join("");
+
+      // Render folder list
+      const container = document.getElementById("cloudPickerFolderListContainer");
+      container.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 30px;">正在读取网盘目录...</div>`;
+
+      try {
+        const res = await fetch(`/api/files?parentId=${encodeURIComponent(parentId)}`);
+        const json = await res.json();
+        const folders = (json.list || []).filter(item => item.resType === 2);
+
+        container.innerHTML = "";
+
+        // Top action: select current folder directly
+        const currentItem = document.createElement("div");
+        const isCurrentActive = (cloudPickerSelectedId === parentId);
+        currentItem.className = "cloud-picker-folder-item" + (isCurrentActive ? " selected" : "");
+        currentItem.innerHTML = `
+          <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;" onclick="selectCloudPickerFolder('${parentId}', '${escapeHtml(currentPathStr)}')">
+            <span style="font-size: 16px;">📂</span>
+            <span style="font-weight: 500;">保存到当前目录: <span style="color: #ff6600;">${escapeHtml(currentPathStr)}</span></span>
+          </div>
+          <button class="btn-primary btn-sm" style="padding: 3px 10px; font-size: 12px;" onclick="event.stopPropagation(); selectCloudPickerFolder('${parentId}', '${escapeHtml(currentPathStr)}')">选中此处</button>
+        `;
+        container.appendChild(currentItem);
+
+        if (folders.length === 0) {
+          const emptyDiv = document.createElement("div");
+          emptyDiv.style.cssText = "text-align: center; padding: 22px 12px; color: var(--text-muted); font-size: 13px;";
+          emptyDiv.innerHTML = `当前目录下没有更深层的子文件夹<br><span style="font-size: 12px; color: var(--text-dim); margin-top: 4px; display: inline-block;">可直接点击上方【选中此处】保存，或右上角新建文件夹</span>`;
+          container.appendChild(emptyDiv);
+          return;
+        }
+
+        folders.forEach(f => {
+          const itemDiv = document.createElement("div");
+          const fPath = currentPathStr + "/" + f.fileName;
+          const isSelected = (cloudPickerSelectedId === f.fileId);
+          itemDiv.className = "cloud-picker-folder-item" + (isSelected ? " selected" : "");
+          itemDiv.dataset.id = f.fileId;
+          itemDiv.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;" onclick="selectCloudPickerFolder('${f.fileId}', '${escapeHtml(fPath)}')">
+              <span style="font-size: 16px;">📁</span>
+              <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(f.fileName)}">${escapeHtml(f.fileName)}</span>
+            </div>
+            <div style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
+              <button class="btn-outline btn-sm" style="padding: 2px 8px; font-size: 11.5px;" onclick="event.stopPropagation(); selectCloudPickerFolder('${f.fileId}', '${escapeHtml(fPath)}')">选择</button>
+              <button class="btn-primary btn-sm" style="padding: 2px 8px; font-size: 11.5px;" onclick="event.stopPropagation(); loadCloudPickerFolder('${f.fileId}', '${escapeHtml(f.fileName)}')">进入 ➔</button>
+            </div>
+          `;
+          itemDiv.ondblclick = () => loadCloudPickerFolder(f.fileId, f.fileName);
+          container.appendChild(itemDiv);
+        });
+      } catch (e) {
+        container.innerHTML = `<div style="color: #f87171; padding: 20px; text-align: center;">读取网盘目录失败: ${e.message}</div>`;
+      }
+    }
+
+    function selectCloudPickerFolder(fileId, pathStr) {
+      cloudPickerSelectedId = fileId;
+      cloudPickerSelectedPath = pathStr;
+      document.getElementById("cloudPickerSelectedPathText").innerText = pathStr;
+      const items = document.querySelectorAll(".cloud-picker-folder-item");
+      items.forEach(el => {
+        if (el.dataset.id === fileId || (fileId === cloudPickerCurrentParentId && !el.dataset.id)) {
+          el.classList.add("selected");
+        } else {
+          el.classList.remove("selected");
+        }
+      });
+    }
+
+    async function promptCreateCloudPickerFolder() {
+      const name = prompt("在当前网盘目录下新建文件夹名称：");
+      if (!name || !name.trim()) return;
+      try {
+        const res = await fetch("/api/create-folder", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: name.trim(), parentId: cloudPickerCurrentParentId })
+        });
+        const d = await res.json();
+        if (d.msg === "success" || d.code === 0) {
+          showToast("新建文件夹成功");
+          loadCloudPickerFolder(cloudPickerCurrentParentId);
+        } else {
+          alert("新建失败: " + (d.msg || JSON.stringify(d)));
+        }
+      } catch (e) {
+        alert("网络异常: " + e.message);
+      }
+    }
+
+    function confirmCloudFolderPicker() {
+      cloudAddTargetParentId = cloudPickerSelectedId;
+      cloudAddTargetFolderPath = cloudPickerSelectedPath || "全部文件";
+      document.getElementById("cloudAddTargetFolderDisplay").innerText = cloudAddTargetFolderPath;
+      closeModal("cloudFolderPickerModal");
     }
 
     async function confirmSubmitCloudAdd() {
@@ -2665,7 +3074,7 @@ HTML_PAGE = """<!DOCTYPE html>
       try {
         const payload = {
           url: resolvedCloudData.url,
-          parentId: currentParentId,
+          parentId: cloudAddTargetParentId || "",
           fileIndexes: selectedIndexes,
           newName: newName || undefined
         };
@@ -2677,19 +3086,19 @@ HTML_PAGE = """<!DOCTYPE html>
         });
         const d = await res.json();
         if (d.data && d.data.taskId) {
-          showToast("离线下载任务添加成功！");
+          showToast(`离线任务添加成功！保存至: ${cloudAddTargetFolderPath}`);
           closeModal("cloudAddModal");
           switchView("offline");
           loadCloudTasks();
         } else {
           alert("添加离线任务失败: " + (d.msg || JSON.stringify(d)));
           confirmBtn.disabled = false;
-          updateCloudFileSummary();
+          updateFilterStateAndSummary();
         }
       } catch (e) {
         alert("提交失败: " + e.message);
         confirmBtn.disabled = false;
-        updateCloudFileSummary();
+        updateFilterStateAndSummary();
       }
     }
 
