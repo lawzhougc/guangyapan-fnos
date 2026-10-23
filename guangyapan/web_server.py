@@ -390,13 +390,44 @@ HTML_PAGE = """<!DOCTYPE html>
     .btn-primary:hover { background: var(--primary-hover); }
     .btn-accent { background: var(--accent); color: #fff; }
     .btn-accent:hover { background: var(--accent-hover); }
-    .btn-secondary { background: #1e293b; border: 1px solid var(--border); color: var(--text); }
-    .btn-secondary:hover { background: #28374d; }
+    .btn-secondary { background: #1e293b; border: 1px solid var(--border); color: #ffffff; }
+    .btn-secondary:hover { background: #28374d; color: #ffffff; }
     .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text-muted); }
     .btn-outline:hover { color: var(--text); border-color: var(--text-muted); background: #ffffff08; }
     .btn-danger { background: #ef444418; color: #f87171; border: 1px solid #ef444435; }
     .btn-danger:hover { background: #ef444430; }
     .btn-sm { padding: 4px 10px; font-size: 12px; border-radius: 5px; }
+
+    /* Light Theme Button Enhancements (Ensuring high readability) */
+    body[data-theme="light"] .btn-secondary {
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #ffffff !important;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+    }
+    body[data-theme="light"] .btn-secondary:hover {
+      background: #334155;
+      color: #ffffff !important;
+    }
+    body[data-theme="light"] .btn-outline {
+      background: #ffffff;
+      border-color: #cbd5e1;
+      color: #334155;
+    }
+    body[data-theme="light"] .btn-outline:hover {
+      background: #f1f5f9;
+      color: #0f172a;
+      border-color: #94a3b8;
+    }
+    body[data-theme="light"] .btn-danger {
+      background: #fee2e2;
+      color: #dc2626;
+      border-color: #fca5a5;
+    }
+    body[data-theme="light"] .btn-danger:hover {
+      background: #fecaca;
+      color: #b91c1c;
+    }
 
     /* Content Views */
     .content-view {
@@ -1168,7 +1199,7 @@ HTML_PAGE = """<!DOCTYPE html>
         <div class="setting-row">
           <div>
             <div style="font-weight: 600;">光鸭网盘 fnOS 原生适配版</div>
-            <div class="setting-desc">版本: v1.0.3 · 开发者 / 维护者: <b>chaos</b></div>
+            <div class="setting-desc">版本: v1.0.4 · 开发者 / 维护者: <b>chaos</b></div>
           </div>
           <div>
             <span class="status-badge" style="background: rgba(255, 122, 0, 0.15); color: var(--accent);">chaos</span>
@@ -2388,17 +2419,17 @@ HTML_PAGE = """<!DOCTYPE html>
       const btn = document.getElementById("themeToggleBtn");
       if (btn) {
         if (theme === "light") {
-          btn.innerHTML = "☀️ 日间";
+          btn.innerHTML = "🌙 夜间";
           btn.title = "当前为日间模式，点击切换为夜间模式";
         } else {
-          btn.innerHTML = "🌙 夜间";
+          btn.innerHTML = "☀️ 日间";
           btn.title = "当前为夜间模式，点击切换为日间模式";
         }
       }
       const mBtn = document.getElementById("mobileThemeBtn");
-      if (mBtn) mBtn.innerHTML = (theme === "light" ? "☀️" : "🌙");
+      if (mBtn) mBtn.innerHTML = (theme === "light" ? "🌙" : "☀️");
       const mcBtn = document.getElementById("mobileCardThemeBtn");
-      if (mcBtn) mcBtn.innerHTML = (theme === "light" ? "☀️ 日间" : "🌙 夜间");
+      if (mcBtn) mcBtn.innerHTML = (theme === "light" ? "🌙 夜间" : "☀️ 日间");
     }
 
     // Init User & Quota

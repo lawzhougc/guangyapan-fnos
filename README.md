@@ -96,13 +96,13 @@ guangyapan_fnos/
    python3 build_fpk.py --arch arm64
    ```
    脚本将自动校验图标资源、写入目标架构清单（`platform = x86` 或 `platform = arm`）、压缩载荷并输出标准的安装包：
-   - `guangyapan-1.0.3-x86_64.fpk`（Intel / AMD 处理器）
-   - `guangyapan-1.0.3-arm64.fpk`（RK3588 / RK3568 / ARM 芯片）
+   - `guangyapan-1.0.4-x86_64.fpk`（Intel / AMD 处理器）
+   - `guangyapan-1.0.4-arm64.fpk`（RK3588 / RK3568 / ARM 芯片）
 
 2. **在飞牛私有云 (fnOS) 中安装**：
    - 打开飞牛 NAS 桌面，进入 **应用中心**。
    - 点击右上角或设置中的 **手动安装**。
-   - 选择打包生成的 `guangyapan-1.0.3-x86_64.fpk` 文件并确认。
+   - 选择打包生成的 `guangyapan-1.0.4-x86_64.fpk` 文件并确认。
    - 安装完成后，飞牛桌面与应用中心将自动生成光鸭网盘图标，点击即可直接进入 Web 管理端。
 
 ---
