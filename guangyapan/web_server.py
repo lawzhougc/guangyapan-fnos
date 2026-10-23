@@ -355,7 +355,7 @@ HTML_PAGE = """<!DOCTYPE html>
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 8px 0 16px 0;
+      padding: 0 0 16px 0;
       user-select: none;
       z-index: 100;
       flex-shrink: 0;
@@ -368,7 +368,7 @@ HTML_PAGE = """<!DOCTYPE html>
       align-items: center;
       justify-content: center;
       width: 100%;
-      height: 48px;
+      height: 56px;
     }
 
     .rail-brand-logo {
@@ -392,7 +392,7 @@ HTML_PAGE = """<!DOCTYPE html>
       gap: 8px;
       width: 100%;
       padding: 0 8px;
-      margin-top: 28px;
+      margin-top: 21px;
       flex: 1;
     }
 
@@ -1261,11 +1261,12 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     .modal-header {
-      padding: 16px 20px;
+      padding: 18px 24px;
       border-bottom: 1px solid var(--border-subtle);
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-shrink: 0;
     }
 
     .modal-title {
@@ -1278,23 +1279,25 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     .modal-body {
-      padding: 20px;
+      padding: 20px 24px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
       gap: 16px;
       font-size: 13px;
       color: var(--text-regular);
+      box-sizing: border-box;
     }
 
     .modal-footer {
-      padding: 14px 20px;
+      padding: 14px 24px;
       border-top: 1px solid var(--border-subtle);
       display: flex;
       align-items: center;
       justify-content: flex-end;
       gap: 10px;
       background: var(--bg-subtle);
+      flex-shrink: 0;
     }
 
     /* Form Controls */
@@ -1947,77 +1950,82 @@ HTML_PAGE = """<!DOCTYPE html>
 </div>
 
 <div class="modal-backdrop" id="downloadConfirmModal">
-    <div class="modal" style="width: 600px; max-width: 95vw; border-radius: 16px; padding: 22px 24px;">
-      <div class="modal-header" style="border-bottom: 1px solid var(--border-subtle); padding-bottom: 12px; margin-bottom: 16px;">
-        <div style="display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 16px;">
+    <div class="modal" style="width: 620px; max-width: 95vw;">
+      <div class="modal-header">
+        <div class="modal-title">
           <span style="font-size: 18px;">⬇️</span>
           <span>下载文件到 NAS</span>
         </div>
         <button class="close-btn" onclick="closeModal('downloadConfirmModal')">&times;</button>
       </div>
-      <div>
-        <div style="margin-bottom: 16px;">
+      <div class="modal-body" style="padding: 20px 24px; gap: 16px;">
+        <div>
           <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px; font-weight: 500;">下载文件：</div>
-          <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 10px 14px; display: flex; align-items: center; gap: 10px;">
+          <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 10px;">
             <span style="font-size: 20px; flex-shrink: 0;">📦</span>
             <div style="font-weight: 500; font-size: 13px; line-height: 1.5; color: var(--text-main); word-break: break-all; flex: 1;" id="dlConfirmFileName">--</div>
           </div>
         </div>
 
-        <div style="margin-bottom: 16px;">
+        <div>
           <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px; font-weight: 500;">选择 NAS 保存目录：</div>
           <div style="display: flex; gap: 8px;">
-            <input type="text" id="dlConfirmPathInput" style="flex: 1; height: 38px; font-size: 13px;" readonly onclick="openFolderPicker(onDlConfirmFolderPicked)">
-            <button class="btn-secondary" onclick="openFolderPicker(onDlConfirmFolderPicked)" style="height: 38px; padding: 0 16px;">📂 浏览目录</button>
+            <input type="text" id="dlConfirmPathInput" style="flex: 1; height: 38px; font-size: 13px; font-family: monospace; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 12px; color: var(--text-main);" readonly onclick="openFolderPicker(onDlConfirmFolderPicked)">
+            <button class="btn-secondary" onclick="openFolderPicker(onDlConfirmFolderPicked)" style="height: 38px; padding: 0 16px; font-size: 13px; flex-shrink: 0;">📂 浏览目录</button>
           </div>
           <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px; line-height: 1.5;">
             💡 提示：可自由下载至 NAS 任意存储卷或共享文件夹（如 影视、下载、照片等）。
           </div>
         </div>
 
-        <div style="display: flex; align-items: center; gap: 8px; margin-top: 14px; padding: 8px 12px; background: var(--bg-subtle); border-radius: 8px; border: 1px solid var(--border-subtle);">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: var(--bg-subtle); border-radius: 8px; border: 1px solid var(--border-subtle);">
           <input type="checkbox" id="setAsDefaultDirCheckbox" style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--brand);">
           <label for="setAsDefaultDirCheckbox" style="font-size: 12.5px; color: var(--text-main); cursor: pointer; user-select: none;">将该目录设为以后的默认下载路径</label>
         </div>
       </div>
 
-      <div class="modal-footer" style="margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end; gap: 10px;">
-        <button class="btn-secondary" onclick="closeModal('downloadConfirmModal')" style="padding: 8px 20px;">取消</button>
-        <button class="btn-primary" onclick="confirmStartDownload()" style="padding: 8px 24px;">立即下载到 NAS</button>
+      <div class="modal-footer" style="padding: 14px 24px;">
+        <button class="btn-secondary" onclick="closeModal('downloadConfirmModal')">取消</button>
+        <button class="btn-primary" onclick="confirmStartDownload()">立即下载到 NAS</button>
       </div>
     </div>
   </div>
 
   <!-- Modal: NAS Folder Picker (Enhanced with All Shares & Intelligent Navigation) -->
   <div class="modal-backdrop" id="folderPickerModal">
-    <div class="modal" style="width: 650px; max-width: 95vw;">
+    <div class="modal" style="width: 660px; max-width: 95vw;">
       <div class="modal-header">
-        <span>📂 选择 NAS 保存目录</span>
+        <div class="modal-title">
+          <span>📂</span>
+          <span>选择 NAS 保存目录</span>
+        </div>
         <button class="close-btn" onclick="closeModal('folderPickerModal')">&times;</button>
       </div>
       
-      <!-- Breadcrumb navigation -->
-      <div id="folderPickerBreadcrumbs" style="display: flex; align-items: center; gap: 4px; font-size: 12.5px; margin-bottom: 8px; overflow-x: auto; white-space: nowrap; padding: 4px 0; color: var(--text-muted);">
-        <!-- populated by js -->
+      <div class="modal-body" style="padding: 16px 24px; gap: 10px;">
+        <!-- Breadcrumb navigation -->
+        <div id="folderPickerBreadcrumbs" style="display: flex; align-items: center; gap: 4px; font-size: 12.5px; overflow-x: auto; white-space: nowrap; padding: 2px 0; color: var(--text-muted);">
+          <!-- populated by js -->
+        </div>
+
+        <!-- Quick Shortcuts -->
+        <div style="display: flex; gap: 6px; overflow-x: auto; white-space: nowrap;">
+          <button class="btn-secondary btn-sm" onclick="loadFolderPickerList('')">🏠 全部共享文件夹与存储卷</button>
+          <button class="btn-secondary btn-sm" onclick="loadFolderPickerList(defaultDownloadDir)">📦 当前默认下载目录</button>
+        </div>
+
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <input type="text" id="folderPickerCurrentPath" readonly style="flex: 1; font-family: monospace; font-size: 12.5px; height: 34px; padding: 0 10px; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-main);" placeholder="当前选定路径...">
+          <button class="btn-secondary btn-sm" onclick="folderPickerGoUp()" style="height: 34px; padding: 0 12px;">⬆️ 上一级</button>
+          <button class="btn-primary btn-sm" onclick="folderPickerMkdir()" style="height: 34px; padding: 0 12px;">➕ 新建子文件夹</button>
+        </div>
+
+        <div class="fs-browser-list" id="folderPickerList" style="min-height: 220px; max-height: 340px;">
+          <!-- populated by js -->
+        </div>
       </div>
 
-      <!-- Quick Shortcuts -->
-      <div style="display: flex; gap: 6px; margin-bottom: 10px; overflow-x: auto; white-space: nowrap;">
-        <button class="btn-secondary btn-sm" onclick="loadFolderPickerList('')">🏠 全部共享文件夹与存储卷</button>
-        <button class="btn-secondary btn-sm" onclick="loadFolderPickerList(defaultDownloadDir)">📦 当前默认下载目录</button>
-      </div>
-
-      <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
-        <input type="text" id="folderPickerCurrentPath" readonly style="flex: 1; font-family: monospace; font-size: 12.5px;" placeholder="当前选定路径...">
-        <button class="btn-secondary btn-sm" onclick="folderPickerGoUp()">⬆️ 上一级</button>
-        <button class="btn-primary btn-sm" onclick="folderPickerMkdir()">➕ 新建子文件夹</button>
-      </div>
-
-      <div class="fs-browser-list" id="folderPickerList" style="min-height: 200px; max-height: 340px;">
-        <!-- populated by js -->
-      </div>
-
-      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+      <div class="modal-footer" style="padding: 14px 24px; display: flex; justify-content: space-between; align-items: center;">
         <div style="font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 380px;">
           选定: <span id="folderPickerFooterPath" style="color: var(--primary); font-family: monospace;">--</span>
         </div>
@@ -2178,7 +2186,6 @@ HTML_PAGE = """<!DOCTYPE html>
           <button type="button" class="btn-primary" onclick="confirmCloudFolderTreeSelection()" style="padding: 8px 24px; font-size: 13px; border-radius: 8px; font-weight: 600;">确定</button>
         </div>
       </div>
-      </div>
     </div>
   </div>
 
@@ -2250,29 +2257,36 @@ HTML_PAGE = """<!DOCTYPE html>
 
   <!-- Modal: Upload -->
   <div class="modal-backdrop" id="uploadModal">
-    <div class="modal">
+    <div class="modal" style="width: 560px; max-width: 95vw;">
       <div class="modal-header">
-        <span>⬆️ 上传文件到光鸭网盘</span>
+        <div class="modal-title">
+          <span>⬆️</span>
+          <span>上传文件到光鸭网盘</span>
+        </div>
         <button class="close-btn" onclick="closeModal('uploadModal')">&times;</button>
       </div>
-      <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">支持极速秒传 (基于迅雷哈希算法)，未命中时直传阿里云 OSS</p>
       
-      <div class="dropzone" onclick="document.getElementById('uploadFileInput').click()">
-        <p id="uploadFileNameText">点击选择或拖拽文件到此处</p>
-        <input type="file" id="uploadFileInput" style="display: none;" onchange="handleUploadSelect(this)">
+      <div class="modal-body" style="padding: 20px 24px; gap: 16px;">
+        <p style="font-size: 12.5px; color: var(--text-muted); margin: 0; line-height: 1.5;">支持极速秒传 (基于迅雷哈希算法)，未命中时直传阿里云 OSS</p>
+        
+        <div class="dropzone" onclick="document.getElementById('uploadFileInput').click()" style="padding: 32px 20px; border: 2px dashed var(--border); border-radius: 12px; background: var(--bg-input); cursor: pointer; text-align: center; transition: all 0.2s;">
+          <div style="font-size: 32px; margin-bottom: 8px;">📤</div>
+          <p id="uploadFileNameText" style="font-size: 13.5px; font-weight: 500; color: var(--text-main); margin: 0;">点击选择或拖拽文件到此处</p>
+          <input type="file" id="uploadFileInput" style="display: none;" onchange="handleUploadSelect(this)">
+        </div>
+
+        <div id="uploadProgressSection" style="display: none;">
+          <div class="task-details" style="margin-bottom: 6px;">
+            <span id="uploadStatusLabel">准备中...</span>
+            <span id="uploadPctLabel">0%</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="uploadProgressBar"></div>
+          </div>
+        </div>
       </div>
 
-      <div id="uploadProgressSection" style="display: none; margin-top: 16px;">
-        <div class="task-details" style="margin-bottom: 6px;">
-          <span id="uploadStatusLabel">准备中...</span>
-          <span id="uploadPctLabel">0%</span>
-        </div>
-        <div class="progress-bar-bg">
-          <div class="progress-bar-fill" id="uploadProgressBar"></div>
-        </div>
-      </div>
-
-      <div class="modal-footer">
+      <div class="modal-footer" style="padding: 14px 24px;">
         <button class="btn-secondary" onclick="closeModal('uploadModal')">关闭</button>
         <button class="btn-primary" id="startUploadBtn" onclick="submitUpload()">开始上传</button>
       </div>
@@ -2880,12 +2894,23 @@ function escapeHtml(str) {
         folders.forEach(f => {
           const div = document.createElement("div");
           const isSelected = (f.path === folderPickerSelectedPath);
-          const cleanName = (f.name || "").replace(/^📁\\s*/, "");
+          let itemIcon = f.is_volume ? "💽" : "📁";
+          let cleanName = (f.name || "").trim();
+          if (cleanName.startsWith("💽")) {
+            itemIcon = "💽";
+            cleanName = cleanName.replace(/^💽\\s*/, "");
+          } else if (cleanName.startsWith("🏠")) {
+            itemIcon = "🏠";
+            cleanName = cleanName.replace(/^🏠\\s*/, "");
+          } else if (cleanName.startsWith("📁")) {
+            itemIcon = "📁";
+            cleanName = cleanName.replace(/^📁\\s*/, "");
+          }
           div.className = "fs-folder-item" + (isSelected ? " selected" : "");
           div.dataset.path = f.path;
           div.innerHTML = `
             <div class="fs-folder-left" style="flex: 1; min-width: 0;" onclick="selectFolderPickerItem('${escapeHtml(f.path)}')">
-              <span style="font-size: 16px; flex-shrink: 0;">📁</span>
+              <span style="font-size: 16px; flex-shrink: 0;">${itemIcon}</span>
               <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: ${f.is_share ? '600' : '400'};" title="${escapeHtml(cleanName)}">${escapeHtml(cleanName)}</span>
             </div>
             <div style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
