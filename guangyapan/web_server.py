@@ -10,7 +10,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from .client import GuangyapanClient
 from .downloader import FileDownloader, fix_permissions, format_size, format_speed
 
-APP_VERSION = "1.0.4"
+APP_VERSION = "1.0.5"
 GITHUB_REPO_URL = "https://github.com/lawzhougc/guangyapan-fnos"
 _VERSION_CACHE = {"last_check": 0, "data": None}
 
@@ -214,9 +214,9 @@ HTML_PAGE = """<!DOCTYPE html>
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>光鸭网盘 · 飞牛系统 (fnOS) 客户端</title>
-  <link rel="icon" type="image/x-icon" href="/favicon.ico?v=1.0.4">
-  <link rel="icon" type="image/png" sizes="32x32" href="/icon.png?v=1.0.4">
-  <link rel="apple-touch-icon" href="/icon.png?v=1.0.4">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico?v=1.0.5">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icon.png?v=1.0.5">
+  <link rel="apple-touch-icon" href="/icon.png?v=1.0.5">
   <script src="/qrcode.min.js"></script>
   <style>
     :root {
@@ -1076,7 +1076,7 @@ HTML_PAGE = """<!DOCTYPE html>
   <!-- Left Sidebar (Windows/fnOS Style) -->
   <aside id="sidebar">
     <div class="brand-box">
-      <img src="/icon.png?v=1.0.4" class="brand-icon" style="width:34px;height:34px;border-radius:8px;object-fit:cover;flex-shrink:0;" alt="光鸭网盘">
+      <img src="/icon.png?v=1.0.5" class="brand-icon" style="width:34px;height:34px;border-radius:8px;object-fit:cover;flex-shrink:0;" alt="光鸭网盘">
       <div>
         <div class="brand-name">光鸭网盘 <span class="brand-badge">fnOS</span></div>
         <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">飞牛 NAS 客户端 · by chaos</div>
@@ -1140,7 +1140,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <header>
       <div class="mobile-header-top">
         <div class="mobile-brand">
-          <img src="/icon.png?v=1.0.4" class="mobile-brand-img" style="width:26px;height:26px;border-radius:6px;object-fit:cover;flex-shrink:0;" alt="光鸭网盘">
+          <img src="/icon.png?v=1.0.5" class="mobile-brand-img" style="width:26px;height:26px;border-radius:6px;object-fit:cover;flex-shrink:0;" alt="光鸭网盘">
           <span>光鸭网盘 <span class="brand-badge" style="font-size:10px;">by chaos</span></span>
         </div>
         <div class="mobile-header-tools">
@@ -1311,7 +1311,7 @@ HTML_PAGE = """<!DOCTYPE html>
           <div>
             <div style="font-weight: 600; font-size: 14.5px;">光鸭网盘 fnOS 原生适配版</div>
             <div class="setting-desc" style="margin-top: 4px;">
-              当前版本：<span id="aboutCurrentVersion" style="font-weight: 600; color: var(--text);">v1.0.4</span> · 开发者 / 维护者：<b>chaos</b>
+              当前版本：<span id="aboutCurrentVersion" style="font-weight: 600; color: var(--text);">v1.0.5</span> · 开发者 / 维护者：<b>chaos</b>
             </div>
           </div>
           <div>
@@ -1434,35 +1434,76 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- Modal: Cloud Add (Magnet & Torrent) -->
+  <!-- Modal: Cloud Add (Magnet & Torrent with File Selection Window) -->
   <div class="modal-backdrop" id="cloudAddModal">
-    <div class="modal">
+    <div class="modal" style="width: 620px; max-width: 95vw;">
       <div class="modal-header">
-        <span>⚡ 云离线下载 (磁力 / BT)</span>
+        <span id="cloudAddModalTitle">⚡ 云离线下载 (磁力 / BT)</span>
         <button class="close-btn" onclick="closeModal('cloudAddModal')">&times;</button>
       </div>
-      <div class="subtabs" style="margin-bottom: 14px;">
-        <div class="subtabs-left">
-          <button class="subtab-btn active" id="tabMagnetBtn" onclick="switchCloudTab('magnet')">磁力 / HTTP 链接</button>
-          <button class="subtab-btn" id="tabTorrentBtn" onclick="switchCloudTab('torrent')">BT 种子文件 (.torrent)</button>
+
+      <!-- Step 1: Input Magnet / URL or Torrent -->
+      <div id="cloudAddStep1">
+        <div class="subtabs" style="margin-bottom: 14px;">
+          <div class="subtabs-left">
+            <button class="subtab-btn active" id="tabMagnetBtn" onclick="switchCloudTab('magnet')">磁力 / HTTP 链接</button>
+            <button class="subtab-btn" id="tabTorrentBtn" onclick="switchCloudTab('torrent')">BT 种子文件 (.torrent)</button>
+          </div>
+        </div>
+
+        <div id="magnetSection">
+          <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 8px;">输入 magnet:?xt=urn:btih: 磁力链接或下载网址：</p>
+          <textarea id="magnetInput" rows="5" placeholder="magnet:?xt=urn:btih:..."></textarea>
+        </div>
+
+        <div id="torrentSection" style="display: none;">
+          <div class="dropzone" onclick="document.getElementById('torrentFileInput').click()">
+            <p id="torrentFileName">点击选择或拖拽 .torrent 种子文件至此处</p>
+            <input type="file" id="torrentFileInput" accept=".torrent" style="display: none;" onchange="handleTorrentSelect(this)">
+          </div>
+        </div>
+
+        <div class="modal-footer" style="margin-top: 18px;">
+          <button class="btn-secondary" onclick="closeModal('cloudAddModal')">取消</button>
+          <button class="btn-primary" id="cloudAddNextBtn" onclick="resolveCloudAdd()">下一步：解析文件列表 ➔</button>
         </div>
       </div>
 
-      <div id="magnetSection">
-        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 8px;">输入 magnet:?xt=urn:btih: 磁力链接或下载网址：</p>
-        <textarea id="magnetInput" rows="5" placeholder="magnet:?xt=urn:btih:..."></textarea>
-      </div>
-
-      <div id="torrentSection" style="display: none;">
-        <div class="dropzone" onclick="document.getElementById('torrentFileInput').click()">
-          <p id="torrentFileName">点击选择或拖拽 .torrent 种子文件至此处</p>
-          <input type="file" id="torrentFileInput" accept=".torrent" style="display: none;" onchange="handleTorrentSelect(this)">
+      <!-- Step 2: Download File Selection Window (弹出的下载文件选择窗口) -->
+      <div id="cloudAddStep2" style="display: none;">
+        <div style="margin-bottom: 12px;">
+          <div style="font-size: 13px; font-weight: 600; margin-bottom: 5px;">任务名称：</div>
+          <input type="text" id="cloudAddTitleInput" style="width: 100%; box-sizing: border-box; font-size: 13px; padding: 7px 10px;">
         </div>
-      </div>
 
-      <div class="modal-footer">
-        <button class="btn-secondary" onclick="closeModal('cloudAddModal')">取消</button>
-        <button class="btn-primary" onclick="submitCloudAdd()">添加任务</button>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 12.5px; color: var(--text-muted);">
+          <div>
+            保存至网盘目录：<span id="cloudAddTargetFolder" style="font-weight: 600; color: var(--text);">/</span>
+          </div>
+          <div id="cloudAddTotalTorrentSize" style="font-family: monospace; color: var(--text-dim);">--</div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
+          <div style="font-size: 13px; font-weight: 600; color: var(--text);">
+            勾选要下载的文件：
+            <span id="cloudAddSelectedSummary" style="font-size: 12px; color: var(--primary); font-weight: 600; margin-left: 4px;"></span>
+          </div>
+          <div style="display: flex; gap: 6px;">
+            <button class="btn-outline btn-sm" style="padding: 2px 8px; font-size: 11.5px;" onclick="setAllCloudFiles(true)">全选</button>
+            <button class="btn-outline btn-sm" style="padding: 2px 8px; font-size: 11.5px;" onclick="setAllCloudFiles(false)">全不选</button>
+            <button class="btn-outline btn-sm" style="padding: 2px 8px; font-size: 11.5px;" onclick="selectVideoCloudFilesOnly()">仅选视频</button>
+          </div>
+        </div>
+
+        <!-- Scrollable Files Container -->
+        <div id="cloudAddFileListContainer" style="max-height: 260px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-subtle);">
+          <!-- Populated by JS -->
+        </div>
+
+        <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px;">
+          <button class="btn-secondary" onclick="backToCloudAddStep1()">⬅️ 返回修改</button>
+          <button class="btn-primary" id="confirmCloudAddBtn" onclick="confirmSubmitCloudAdd()">🚀 确定添加离线下载</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1504,7 +1545,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <div class="modal" style="width: 460px; max-width: 95vw; overflow-y: auto;">
       <div class="modal-header">
         <div style="display: flex; align-items: center; gap: 8px;">
-          <img src="/icon.png?v=1.0.4" style="width: 26px; height: 26px; object-fit: contain; border-radius: 6px;">
+          <img src="/icon.png?v=1.0.5" style="width: 26px; height: 26px; object-fit: contain; border-radius: 6px;">
           <span>光鸭网盘 · 账号登录</span>
         </div>
         <button class="close-btn" onclick="closeLoginModal()">&times;</button>
@@ -2387,10 +2428,23 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     // ================= CLOUD ADD (MAGNET / TORRENT) =================
+    let resolvedCloudData = null;
+
     function openCloudAddModal() {
+      resolvedCloudData = null;
       document.getElementById("magnetInput").value = "";
       selectedTorrentFile = null;
+      document.getElementById("torrentFileInput").value = "";
       document.getElementById("torrentFileName").innerText = "点击选择或拖拽 .torrent 种子文件至此处";
+      
+      // Reset view to Step 1
+      document.getElementById("cloudAddStep1").style.display = "block";
+      document.getElementById("cloudAddStep2").style.display = "none";
+      const nextBtn = document.getElementById("cloudAddNextBtn");
+      nextBtn.disabled = false;
+      nextBtn.innerText = "下一步：解析文件列表 ➔";
+      
+      switchCloudTab('magnet');
       openModal("cloudAddModal");
     }
 
@@ -2412,60 +2466,234 @@ HTML_PAGE = """<!DOCTYPE html>
     function handleTorrentSelect(input) {
       if (input.files && input.files[0]) {
         selectedTorrentFile = input.files[0];
-        document.getElementById("torrentFileName").innerText = "已选择: " + selectedTorrentFile.name;
+        document.getElementById("torrentFileName").innerText = "已选择: " + selectedTorrentFile.name + ` (${formatBytes(selectedTorrentFile.size)})`;
       }
     }
 
-    async function submitCloudAdd() {
+    async function resolveCloudAdd() {
+      const nextBtn = document.getElementById("cloudAddNextBtn");
+
       if (activeCloudTab === 'magnet') {
         const magnet = document.getElementById("magnetInput").value.trim();
         if (!magnet) {
-          alert("请输入磁力链接或 URL");
+          alert("请输入磁力链接或下载网址");
           return;
         }
+        nextBtn.disabled = true;
+        nextBtn.innerText = "⏳ 正在解析资源信息，请稍候...";
         try {
-          const res = await fetch("/api/cloud-add/magnet", {
+          const res = await fetch("/api/cloud-add/resolve", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ url: magnet, parentId: currentParentId })
+            body: JSON.stringify({ url: magnet })
           });
           const d = await res.json();
-          if (d.data && d.data.taskId) {
-            showToast("云下载任务已添加！");
-            closeModal("cloudAddModal");
-            switchView("offline");
+          if (d.success) {
+            resolvedCloudData = d;
+            showCloudAddStep2(d);
           } else {
-            alert("添加失败: " + (d.msg || JSON.stringify(d)));
+            alert("解析失败: " + (d.error || JSON.stringify(d)));
+            nextBtn.disabled = false;
+            nextBtn.innerText = "下一步：解析文件列表 ➔";
           }
         } catch (e) {
-          alert("错误: " + e.message);
+          alert("网络或解析异常: " + e.message);
+          nextBtn.disabled = false;
+          nextBtn.innerText = "下一步：解析文件列表 ➔";
         }
       } else {
         if (!selectedTorrentFile) {
-          alert("请选择 .torrent 种子文件");
+          alert("请先选择 .torrent 种子文件");
           return;
         }
+        nextBtn.disabled = true;
+        nextBtn.innerText = "⏳ 正在解析种子文件，请稍候...";
         const formData = new FormData();
         formData.append("torrent", selectedTorrentFile);
-        formData.append("parentId", currentParentId);
         try {
-          const res = await fetch("/api/cloud-add/torrent", {
+          const res = await fetch("/api/cloud-add/resolve", {
             method: "POST",
             body: formData
           });
           const d = await res.json();
-          if (d.data && d.data.taskId) {
-            showToast("BT 离线任务已添加！");
-            closeModal("cloudAddModal");
-            switchView("offline");
+          if (d.success) {
+            resolvedCloudData = d;
+            showCloudAddStep2(d);
           } else {
-            alert("添加失败: " + (d.msg || JSON.stringify(d)));
+            alert("解析种子失败: " + (d.error || JSON.stringify(d)));
+            nextBtn.disabled = false;
+            nextBtn.innerText = "下一步：解析文件列表 ➔";
           }
         } catch (e) {
-          alert("上传失败: " + e.message);
+          alert("上传或解析异常: " + e.message);
+          nextBtn.disabled = false;
+          nextBtn.innerText = "下一步：解析文件列表 ➔";
         }
       }
     }
+
+    function showCloudAddStep2(data) {
+      document.getElementById("cloudAddStep1").style.display = "none";
+      document.getElementById("cloudAddStep2").style.display = "block";
+      
+      document.getElementById("cloudAddTitleInput").value = data.title || "";
+      const folderName = (breadcrumbStack && breadcrumbStack.length > 0) ? breadcrumbStack.map(b => b.name).join("/") : "/";
+      document.getElementById("cloudAddTargetFolder").innerText = folderName || "/";
+      document.getElementById("cloudAddTotalTorrentSize").innerText = "总大小: " + (data.formattedTotalSize || formatBytes(data.totalSize || 0));
+
+      const container = document.getElementById("cloudAddFileListContainer");
+      container.innerHTML = "";
+
+      const files = data.files || [];
+      if (files.length === 0) {
+        container.innerHTML = `
+          <div style="padding: 28px 16px; text-align: center; color: var(--text-muted); font-size: 13px;">
+            ⚠️ 该资源为单文件或未返回具体子文件列表，将直接整体下载。
+          </div>
+        `;
+      } else {
+        files.forEach((f, idx) => {
+          const row = document.createElement("div");
+          row.className = "cloud-file-row";
+          row.style.cssText = "display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 13px; gap: 10px; cursor: pointer; user-select: none;";
+          if (idx === files.length - 1) {
+            row.style.borderBottom = "none";
+          }
+
+          const ext = (f.fileName || "").split(".").pop().toLowerCase();
+          let icon = "📄";
+          if (["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "ts", "m4v", "iso", "rmvb"].includes(ext)) icon = "🎬";
+          else if (["mp3", "flac", "wav", "aac", "ogg", "m4a"].includes(ext)) icon = "🎵";
+          else if (["zip", "rar", "7z", "tar", "gz"].includes(ext)) icon = "📦";
+          else if (["jpg", "jpeg", "png", "gif", "webp", "bmp"].includes(ext)) icon = "🖼️";
+          else if (["nfo", "txt", "md"].includes(ext)) icon = "📝";
+          else if (["srt", "ass", "vtt", "sub"].includes(ext)) icon = "💬";
+
+          row.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;">
+              <input type="checkbox" class="cloud-file-cb" data-index="${f.fileIndex}" data-size="${f.fileSize || 0}" data-ext="${ext}" ${f.selected ? 'checked' : ''} style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--primary);">
+              <span style="font-size: 16px; flex-shrink: 0;">${icon}</span>
+              <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; color: var(--text);" title="${escapeHtml(f.fileName)}">${escapeHtml(f.fileName)}</span>
+            </div>
+            <div style="font-family: monospace; font-size: 12px; color: var(--text-dim); flex-shrink: 0;">${escapeHtml(f.formattedSize || formatBytes(f.fileSize || 0))}</div>
+          `;
+
+          row.onclick = (e) => {
+            if (e.target.tagName !== 'INPUT') {
+              const cb = row.querySelector('.cloud-file-cb');
+              cb.checked = !cb.checked;
+            }
+            updateCloudFileSummary();
+          };
+          const cb = row.querySelector('.cloud-file-cb');
+          cb.onchange = () => updateCloudFileSummary();
+
+          container.appendChild(row);
+        });
+      }
+
+      updateCloudFileSummary();
+    }
+
+    function updateCloudFileSummary() {
+      const cbs = Array.from(document.querySelectorAll(".cloud-file-cb"));
+      const total = cbs.length;
+      const confirmBtn = document.getElementById("confirmCloudAddBtn");
+      if (total === 0) {
+        document.getElementById("cloudAddSelectedSummary").innerText = "";
+        confirmBtn.disabled = false;
+        confirmBtn.innerText = "🚀 确定添加离线下载";
+        return;
+      }
+      const checked = cbs.filter(cb => cb.checked);
+      let totalBytes = 0;
+      checked.forEach(cb => {
+        totalBytes += parseInt(cb.dataset.size || "0", 10);
+      });
+      document.getElementById("cloudAddSelectedSummary").innerText = `已勾选 ${checked.length} / ${total} 项 (共 ${formatBytes(totalBytes)})`;
+      if (checked.length === 0) {
+        confirmBtn.disabled = true;
+        confirmBtn.innerText = "请至少勾选 1 个文件";
+      } else {
+        confirmBtn.disabled = false;
+        confirmBtn.innerText = `🚀 确定添加离线下载 (已选 ${checked.length} 项)`;
+      }
+    }
+
+    function setAllCloudFiles(checked) {
+      const cbs = document.querySelectorAll(".cloud-file-cb");
+      cbs.forEach(cb => cb.checked = checked);
+      updateCloudFileSummary();
+    }
+
+    function selectVideoCloudFilesOnly() {
+      const videoExts = ["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "ts", "m4v", "iso", "rmvb"];
+      const cbs = document.querySelectorAll(".cloud-file-cb");
+      cbs.forEach(cb => {
+        const ext = (cb.dataset.ext || "").toLowerCase();
+        cb.checked = videoExts.includes(ext);
+      });
+      updateCloudFileSummary();
+    }
+
+    function backToCloudAddStep1() {
+      document.getElementById("cloudAddStep1").style.display = "block";
+      document.getElementById("cloudAddStep2").style.display = "none";
+      const nextBtn = document.getElementById("cloudAddNextBtn");
+      nextBtn.disabled = false;
+      nextBtn.innerText = "下一步：解析文件列表 ➔";
+    }
+
+    async function confirmSubmitCloudAdd() {
+      if (!resolvedCloudData) return;
+      const cbs = Array.from(document.querySelectorAll(".cloud-file-cb"));
+      let selectedIndexes = null;
+      if (cbs.length > 0) {
+        const checked = cbs.filter(cb => cb.checked);
+        if (checked.length === 0) {
+          alert("请至少勾选一个要下载的文件！");
+          return;
+        }
+        selectedIndexes = checked.map(cb => parseInt(cb.dataset.index, 10));
+      }
+
+      const newName = document.getElementById("cloudAddTitleInput").value.trim();
+      const confirmBtn = document.getElementById("confirmCloudAddBtn");
+      confirmBtn.disabled = true;
+      confirmBtn.innerText = "⏳ 正在提交离线任务...";
+
+      try {
+        const payload = {
+          url: resolvedCloudData.url,
+          parentId: currentParentId,
+          fileIndexes: selectedIndexes,
+          newName: newName || undefined
+        };
+
+        const res = await fetch("/api/cloud-add/magnet", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const d = await res.json();
+        if (d.data && d.data.taskId) {
+          showToast("离线下载任务添加成功！");
+          closeModal("cloudAddModal");
+          switchView("offline");
+          loadCloudTasks();
+        } else {
+          alert("添加离线任务失败: " + (d.msg || JSON.stringify(d)));
+          confirmBtn.disabled = false;
+          updateCloudFileSummary();
+        }
+      } catch (e) {
+        alert("提交失败: " + e.message);
+        confirmBtn.disabled = false;
+        updateCloudFileSummary();
+      }
+    }
+
+    const submitCloudAdd = resolveCloudAdd;
 
     // ================= UPLOAD =================
     function openUploadModal() {
@@ -3239,12 +3467,144 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.app.clear_completed_tasks()
             self._send_json({"success": True})
 
+        elif path == "/api/cloud-add/resolve":
+            content_type = self.headers.get("Content-Type", "")
+            if "multipart/form-data" in content_type:
+                # Torrent file upload
+                raw_data = self.rfile.read(content_length)
+                boundary = content_type.split("boundary=")[1].encode("utf-8")
+                parts = raw_data.split(b"--" + boundary)
+                torrent_bytes = None
+                filename = "task.torrent"
+                for p in parts:
+                    if b'name="torrent"' in p:
+                        header_end = p.find(b"\r\n\r\n")
+                        if header_end != -1:
+                            torrent_bytes = p[header_end + 4 : -2]
+                            if b'filename="' in p:
+                                try:
+                                    fn_part = p.split(b'filename="')[1].split(b'"')[0]
+                                    filename = fn_part.decode("utf-8", errors="ignore")
+                                except Exception:
+                                    pass
+                if not torrent_bytes:
+                    self._send_json({"error": "未找到 .torrent 种子文件"}, 400)
+                    return
+                try:
+                    resolved = self.app.client.resolve_torrent(torrent_bytes, filename=filename)
+                    bt_info = resolved.get("btResInfo", {})
+                    info_hash = bt_info.get("infoHash", "")
+                    magnet_url = f"magnet:?xt=urn:btih:{info_hash}" if info_hash else ""
+                    subfiles = bt_info.get("subfiles", [])
+                    exclude_indices = set(bt_info.get("excludeIndices", []))
+
+                    files = []
+                    for sf in subfiles:
+                        idx = sf.get("fileIndex", 0)
+                        size = sf.get("fileSize", 0)
+                        files.append({
+                            "fileIndex": idx,
+                            "fileName": sf.get("fileName") or sf.get("path") or f"file_{idx}",
+                            "fileSize": size,
+                            "formattedSize": format_size(size),
+                            "selected": (idx not in exclude_indices) if subfiles else True
+                        })
+
+                    title = bt_info.get("fileName") or bt_info.get("title") or filename
+                    total_size = bt_info.get("fileSize", sum(f["fileSize"] for f in files))
+
+                    self._send_json({
+                        "success": True,
+                        "type": "bt",
+                        "title": title,
+                        "totalSize": total_size,
+                        "formattedTotalSize": format_size(total_size),
+                        "url": magnet_url,
+                        "files": files
+                    })
+                except Exception as e:
+                    self._send_json({"error": f"解析种子失败: {str(e)}"}, 500)
+            else:
+                # JSON with url (magnet or http/https)
+                body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                url = (body.get("url") or "").strip()
+                if not url:
+                    self._send_json({"error": "URL 不能为空"}, 400)
+                    return
+                try:
+                    resolved = self.app.client.resolve_res(url)
+                    bt_info = resolved.get("btResInfo")
+                    url_info = resolved.get("urlResInfo")
+
+                    if bt_info:
+                        subfiles = bt_info.get("subfiles", [])
+                        exclude_indices = set(bt_info.get("excludeIndices", []))
+                        files = []
+                        for sf in subfiles:
+                            idx = sf.get("fileIndex", 0)
+                            size = sf.get("fileSize", 0)
+                            files.append({
+                                "fileIndex": idx,
+                                "fileName": sf.get("fileName") or sf.get("path") or f"file_{idx}",
+                                "fileSize": size,
+                                "formattedSize": format_size(size),
+                                "selected": (idx not in exclude_indices) if subfiles else True
+                            })
+                        title = bt_info.get("fileName") or bt_info.get("title") or "离线下载任务"
+                        total_size = bt_info.get("fileSize", sum(f["fileSize"] for f in files))
+                        self._send_json({
+                            "success": True,
+                            "type": "bt",
+                            "title": title,
+                            "totalSize": total_size,
+                            "formattedTotalSize": format_size(total_size),
+                            "url": url,
+                            "files": files
+                        })
+                    elif url_info:
+                        title = url_info.get("fileName") or url.split("/")[-1] or "直链下载"
+                        file_size = url_info.get("fileSize", 0)
+                        self._send_json({
+                            "success": True,
+                            "type": "url",
+                            "title": title,
+                            "totalSize": file_size,
+                            "formattedTotalSize": format_size(file_size),
+                            "url": url,
+                            "files": [{
+                                "fileIndex": 0,
+                                "fileName": title,
+                                "fileSize": file_size,
+                                "formattedSize": format_size(file_size),
+                                "selected": True
+                            }]
+                        })
+                    else:
+                        self._send_json({
+                            "success": True,
+                            "type": "generic",
+                            "title": url.split("/")[-1] or "离线下载",
+                            "totalSize": 0,
+                            "formattedTotalSize": "未知大小",
+                            "url": url,
+                            "files": []
+                        })
+                except Exception as e:
+                    self._send_json({"error": f"解析资源失败: {str(e)}"}, 500)
+
         elif path == "/api/cloud-add/magnet":
             body = json.loads(self.rfile.read(content_length).decode("utf-8"))
             magnet = body.get("url")
             parent_id = body.get("parentId", "")
+            file_indexes = body.get("fileIndexes")
+            new_name = body.get("newName")
             try:
-                res = self.app.client.cloud_add_magnet(magnet, parent_id=parent_id)
+                res = self.app.client.cloud_add_magnet(
+                    magnet,
+                    parent_id=parent_id,
+                    file_indexes=file_indexes,
+                    new_name=new_name
+                )
                 self._send_json(res)
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
@@ -3258,23 +3618,48 @@ class RequestHandler(BaseHTTPRequestHandler):
             torrent_bytes = None
             filename = "task.torrent"
             parent_id = ""
+            file_indexes = None
+            new_name = None
 
             for p in parts:
                 if b'name="torrent"' in p:
                     header_end = p.find(b"\r\n\r\n")
                     if header_end != -1:
                         torrent_bytes = p[header_end + 4 : -2]
+                        if b'filename="' in p:
+                            try:
+                                fn_part = p.split(b'filename="')[1].split(b'"')[0]
+                                filename = fn_part.decode("utf-8", errors="ignore")
+                            except Exception:
+                                pass
                 elif b'name="parentId"' in p:
                     header_end = p.find(b"\r\n\r\n")
                     if header_end != -1:
                         parent_id = p[header_end + 4 : -2].decode("utf-8")
+                elif b'name="fileIndexes"' in p:
+                    header_end = p.find(b"\r\n\r\n")
+                    if header_end != -1:
+                        try:
+                            file_indexes = json.loads(p[header_end + 4 : -2].decode("utf-8"))
+                        except Exception:
+                            pass
+                elif b'name="newName"' in p:
+                    header_end = p.find(b"\r\n\r\n")
+                    if header_end != -1:
+                        new_name = p[header_end + 4 : -2].decode("utf-8").strip()
 
             if not torrent_bytes:
                 self._send_json({"error": "No torrent file found"}, 400)
                 return
 
             try:
-                res = self.app.client.cloud_add_torrent(torrent_bytes, filename=filename, parent_id=parent_id)
+                res = self.app.client.cloud_add_torrent(
+                    torrent_bytes,
+                    filename=filename,
+                    parent_id=parent_id,
+                    file_indexes=file_indexes,
+                    new_name=new_name
+                )
                 self._send_json(res)
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)

@@ -314,14 +314,24 @@ class GuangyapanClient:
         return res.get("data", {})
 
     # ================= Cloud Add (Magnet & BT) =================
-    def cloud_add_magnet(self, magnet_url: str, parent_id: str = "", new_name: Optional[str] = None) -> Dict[str, Any]:
+    def resolve_res(self, url: str) -> Dict[str, Any]:
         """
-        Add a magnet link task to cloud download.
+        Resolve a resource URL (magnet, http/https, etc.) before creating offline task.
+        Returns resolved data with btResInfo or urlResInfo.
+        """
+        res = self._post("/cloudcollection/v1/resolve_res", {"url": url.strip()})
+        return res.get("data", {})
+
+    def cloud_add_magnet(self, magnet_url: str, parent_id: str = "", file_indexes: Optional[List[int]] = None, new_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Add a magnet link task to cloud download with optional file selection and custom name.
         """
         body = {
             "url": magnet_url.strip(),
             "parentId": parent_id or ""
         }
+        if file_indexes is not None:
+            body["fileIndexes"] = file_indexes
         if new_name:
             body["newName"] = new_name
         res = self._post("/cloudcollection/v1/create_task", body)
@@ -363,12 +373,12 @@ class GuangyapanClient:
             "url": magnet_url,
             "parentId": parent_id or ""
         }
-        if file_indexes:
+        if file_indexes is not None:
             body["fileIndexes"] = file_indexes
         if new_name:
             body["newName"] = new_name
-        elif bt_info.get("title"):
-            body["newName"] = bt_info.get("title")
+        elif bt_info.get("title") or bt_info.get("fileName"):
+            body["newName"] = bt_info.get("title") or bt_info.get("fileName")
 
         return self._post("/cloudcollection/v1/create_task", body)
 
