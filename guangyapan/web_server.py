@@ -5,9 +5,14 @@ import re
 import glob
 import threading
 import urllib.parse
+import urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from .client import GuangyapanClient
 from .downloader import FileDownloader, fix_permissions, format_size, format_speed
+
+APP_VERSION = "1.0.4"
+GITHUB_REPO_URL = "https://github.com/lawzhougc/guangyapan-fnos"
+_VERSION_CACHE = {"last_check": 0, "data": None}
 
 def get_fnos_storage_volumes():
     """Discover all mounted storage volumes on fnOS (e.g. /vol1, /vol2, /vol01)."""
@@ -1107,6 +1112,7 @@ HTML_PAGE = """<!DOCTYPE html>
           <span>⚙️</span>
           <span>系统设置</span>
         </div>
+        <span class="nav-badge orange" id="settingsUpdateBadge" style="display: none;">NEW</span>
       </div>
     </div>
 
@@ -1298,14 +1304,52 @@ HTML_PAGE = """<!DOCTYPE html>
       </div>
 
       <div class="setting-card">
-        <div class="setting-card-title">ℹ️ 套件信息与署名</div>
+        <div class="setting-card-title">📖 关于</div>
+
+        <!-- 基础套件信息 -->
         <div class="setting-row">
           <div>
-            <div style="font-weight: 600;">光鸭网盘 fnOS 原生适配版</div>
-            <div class="setting-desc">版本: v1.0.4 · 开发者 / 维护者: <b>chaos</b></div>
+            <div style="font-weight: 600; font-size: 14.5px;">光鸭网盘 fnOS 原生适配版</div>
+            <div class="setting-desc" style="margin-top: 4px;">
+              当前版本：<span id="aboutCurrentVersion" style="font-weight: 600; color: var(--text);">v1.0.4</span> · 开发者 / 维护者：<b>chaos</b>
+            </div>
           </div>
           <div>
-            <span class="status-badge" style="background: rgba(255, 122, 0, 0.15); color: var(--accent);">chaos</span>
+            <span class="status-badge" style="background: rgba(255, 122, 0, 0.15); color: var(--accent); font-weight: 600;">chaos 适配版</span>
+          </div>
+        </div>
+
+        <!-- GitHub 开源仓库地址 -->
+        <div class="setting-row" style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);">
+          <div style="flex: 1; min-width: 0;">
+            <div style="font-weight: 600;">GitHub 开源主页</div>
+            <div class="setting-desc" style="margin-top: 4px;">
+              <a href="https://github.com/lawzhougc/guangyapan-fnos" target="_blank" rel="noopener noreferrer" style="color: var(--primary); text-decoration: underline; word-break: break-all;">
+                https://github.com/lawzhougc/guangyapan-fnos ↗
+              </a>
+            </div>
+          </div>
+          <div style="flex-shrink: 0; margin-left: 12px;">
+            <a href="https://github.com/lawzhougc/guangyapan-fnos" target="_blank" rel="noopener noreferrer" class="btn-outline btn-sm" style="display: inline-flex; align-items: center; gap: 4px; text-decoration: none;">
+              ⭐ 前往仓库
+            </a>
+          </div>
+        </div>
+
+        <!-- 新版本更新提示 -->
+        <div class="setting-row" style="margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);">
+          <div style="flex: 1; min-width: 0;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-weight: 600;">新版本更新提示</span>
+              <span id="updateStatusBadge" class="status-badge" style="background: var(--bg-hover); color: var(--text-muted); font-size: 11px;">未检查</span>
+            </div>
+            <div class="setting-desc" id="updateStatusDesc" style="margin-top: 4px; line-height: 1.5;">
+              点击右侧按键检查是否有新版本发布。
+            </div>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center; flex-shrink: 0; margin-left: 12px;">
+            <button class="btn-secondary btn-sm" id="checkUpdateBtn" onclick="checkForUpdates(true)">🔍 检查更新</button>
+            <a id="downloadUpdateBtn" href="https://github.com/lawzhougc/guangyapan-fnos/releases" target="_blank" rel="noopener noreferrer" class="btn-primary btn-sm" style="display: none; text-decoration: none;">⬇️ 前往下载</a>
           </div>
         </div>
       </div>
@@ -2219,7 +2263,7 @@ HTML_PAGE = """<!DOCTYPE html>
       }
     }
 
-    // ================= VIEW: SETTINGS =================
+    // ================= VIEW: SETTINGS & ABOUT =================
     async function loadSettings() {
       try {
         const res = await fetch("/api/settings");
@@ -2228,8 +2272,97 @@ HTML_PAGE = """<!DOCTYPE html>
           defaultDownloadDir = d.download_dir;
           document.getElementById("settingDownloadDirInput").value = defaultDownloadDir;
         }
+        if (d.version) {
+          const vEl = document.getElementById("aboutCurrentVersion");
+          if (vEl) vEl.innerText = "v" + d.version;
+        }
       } catch (e) {
         console.error(e);
+      }
+      // Silently check for updates in background
+      checkForUpdates(false);
+    }
+
+    let isCheckingUpdate = false;
+    async function checkForUpdates(manual = false) {
+      if (isCheckingUpdate) return;
+      isCheckingUpdate = true;
+      const btn = document.getElementById("checkUpdateBtn");
+      const badge = document.getElementById("updateStatusBadge");
+      const desc = document.getElementById("updateStatusDesc");
+      const dlBtn = document.getElementById("downloadUpdateBtn");
+      const navBadge = document.getElementById("settingsUpdateBadge");
+
+      if (btn && manual) {
+        btn.innerText = "⏳ 检查中...";
+        btn.disabled = true;
+      }
+
+      try {
+        const res = await fetch(`/api/version/check${manual ? '?force=1' : ''}`);
+        const data = await res.json();
+
+        if (data.has_update) {
+          if (badge) {
+            badge.className = "status-badge status-warning";
+            badge.style.background = "rgba(255, 122, 0, 0.2)";
+            badge.style.color = "var(--primary)";
+            badge.innerText = `发现新版本 v${data.latest_version}`;
+          }
+          if (desc) {
+            desc.innerHTML = `<span style="color: var(--primary); font-weight: 600;">🎉 发现新版本 v${escapeHtml(data.latest_version)} 发布！</span><br><span style="font-size: 12px; color: var(--text-muted);">${escapeHtml(data.release_title || '请前往 GitHub Releases 下载并安装最新 .fpk 套件。')}</span>`;
+          }
+          if (dlBtn) {
+            dlBtn.href = data.release_url || "https://github.com/lawzhougc/guangyapan-fnos/releases";
+            dlBtn.style.display = "inline-flex";
+          }
+          if (navBadge) {
+            navBadge.style.display = "inline-block";
+          }
+          if (manual) {
+            showToast(`发现新版本 v${data.latest_version}！`);
+          }
+        } else {
+          if (badge) {
+            badge.className = "status-badge status-success";
+            badge.style.background = "rgba(34, 197, 94, 0.15)";
+            badge.style.color = "#22c55e";
+            badge.innerText = "已是最新版本";
+          }
+          if (desc) {
+            if (data.error) {
+              desc.innerHTML = `当前版本 <b>v${escapeHtml(data.current_version)}</b>。<br><span style="font-size: 12px; color: var(--text-dim);">${escapeHtml(data.error_hint || '无法直接连接 GitHub API，您可随时访问 GitHub Releases 页面查看最新发布包。')}</span>`;
+            } else {
+              desc.innerHTML = `当前版本 <b>v${escapeHtml(data.current_version)}</b> 为最新版本，系统运行稳定。`;
+            }
+          }
+          if (dlBtn) {
+            dlBtn.style.display = "none";
+          }
+          if (navBadge) {
+            navBadge.style.display = "none";
+          }
+          if (manual) {
+            showToast("当前已是最新版本");
+          }
+        }
+      } catch (e) {
+        if (badge) {
+          badge.className = "status-badge";
+          badge.innerText = "检测受限";
+        }
+        if (desc) {
+          desc.innerHTML = `网络异常或 GitHub 连接受限，可直接访问上方 GitHub 主页查看最新版本。`;
+        }
+        if (manual) {
+          showToast("检查更新超时，请直接访问 GitHub 页面");
+        }
+      } finally {
+        isCheckingUpdate = false;
+        if (btn) {
+          btn.innerText = "🔍 检查更新";
+          btn.disabled = false;
+        }
       }
     }
 
@@ -2919,8 +3052,62 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/settings":
             self._send_json({
                 "download_dir": self.app.download_dir,
-                "use_aria2": self.app.downloader.use_aria2
+                "use_aria2": self.app.downloader.use_aria2,
+                "version": APP_VERSION,
+                "github_url": GITHUB_REPO_URL
             })
+
+        elif path == "/api/version/check":
+            force_refresh = query.get("force", ["0"])[0] in ("1", "true")
+            now = time.time()
+            if not force_refresh and _VERSION_CACHE["data"] and (now - _VERSION_CACHE["last_check"] < 300):
+                self._send_json(_VERSION_CACHE["data"])
+                return
+
+            curr_v = APP_VERSION
+            result = {
+                "current_version": curr_v,
+                "latest_version": curr_v,
+                "has_update": False,
+                "release_url": f"{GITHUB_REPO_URL}/releases",
+                "release_title": "",
+                "release_notes": "",
+                "published_at": "",
+                "error": None
+            }
+            try:
+                req = urllib.request.Request(
+                    "https://api.github.com/repos/lawzhougc/guangyapan-fnos/releases/latest",
+                    headers={
+                        "User-Agent": "Guangyapan-fnOS",
+                        "Accept": "application/vnd.github.v3+json"
+                    }
+                )
+                with urllib.request.urlopen(req, timeout=4) as resp:
+                    if resp.status == 200:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        tag = data.get("tag_name", "").lstrip("v")
+                        result["latest_version"] = tag
+                        result["release_url"] = data.get("html_url", result["release_url"])
+                        result["release_title"] = data.get("name", "")
+                        result["release_notes"] = data.get("body", "")
+                        result["published_at"] = data.get("published_at", "")
+
+                        def parse_version(v_str):
+                            parts = []
+                            for p in re.findall(r"\d+", v_str):
+                                parts.append(int(p))
+                            return tuple(parts)
+
+                        if parse_version(tag) > parse_version(curr_v):
+                            result["has_update"] = True
+            except Exception as e:
+                result["error"] = str(e)
+                result["error_hint"] = "无法连接 GitHub API 或仓库为私有，请直接访问 GitHub Releases 页面查看最新发布包"
+
+            _VERSION_CACHE["last_check"] = now
+            _VERSION_CACHE["data"] = result
+            self._send_json(result)
 
         elif path == "/api/fs/browse":
             target_path = query.get("path", [""])[0].strip()
