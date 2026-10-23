@@ -125,7 +125,7 @@ if __name__ == "__main__":
     ".url": {
         "guangyapan.Application": {
             "title": "光鸭网盘",
-            "desc": "光鸭网盘 Web 管理界面",
+            "desc": "光鸭网盘 Web 管理端 (by chaos)",
             "icon": "images/icon_{0}.png",
             "type": "url",
             "protocol": "http",
@@ -171,10 +171,10 @@ version="1.0.3"
 desc="光鸭网盘 fnOS 专用版，支持高速上传下载、磁链/BT云离线、NAS本地存储管理"
 arch="{arch_val}"
 platform="{platform_val}"
-maintainer="guangyapan"
-maintainer_url="https://guangyapan.com"
-distributor="fnOS"
-distributor_url="https://guangyapan.com"
+maintainer="chaos"
+maintainer_url="https://github.com/lawzhougc/guangyapan-fnos"
+distributor="chaos"
+distributor_url="https://github.com/lawzhougc/guangyapan-fnos"
 display_name="光鸭网盘"
 desktop_uidir="ui"
 desktop_applaunchname="guangyapan.Application"
@@ -185,7 +185,7 @@ install_type="volume"
 checkport="false"
 micro_app="false"
 disable_authorization_path="false"
-changelog="1.0.3: [{arch_tag.upper()} 架构] 适配光鸭官方视觉与橙底鸭子图标；完整支持官方扫码登录与Token导入；优化NAS本地存储目录选择与全状态运行管理"
+changelog="1.0.3: [{arch_tag.upper()} 架构 · chaos 适配版] 适配光鸭官方视觉与橙底鸭子图标；完整支持官方扫码登录与Token导入；优化NAS本地存储目录选择与全状态运行管理"
 """
     with open(os.path.join(pkg_root, "manifest"), "w", encoding="utf-8", newline="\n") as f:
         f.write(manifest_content)

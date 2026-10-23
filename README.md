@@ -136,6 +136,14 @@ python3 cli.py upload /path/to/local/file.mp4
 
 ---
 
+## 👤 作者与维护者
+
+- **开发者 / 适配维护者**: chaos
+- **项目仓库**: [https://github.com/lawzhougc/guangyapan-fnos](https://github.com/lawzhougc/guangyapan-fnos)
+
+---
+
 ## 📄 许可证
 
 本项目基于 [MIT License](LICENSE) 开源。
+Copyright (c) 2026 chaos.

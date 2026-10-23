@@ -2,7 +2,7 @@
     ".url": {
         "guangyapan.Application": {
             "title": "光鸭网盘",
-            "desc": "光鸭网盘 Web 管理界面",
+            "desc": "光鸭网盘 Web 管理端 (by chaos)",
             "icon": "images/icon_{0}.png",
             "type": "url",
             "protocol": "http",

@@ -940,7 +940,7 @@ HTML_PAGE = """<!DOCTYPE html>
       <img src="/icon.png?v=1.0.4" class="brand-icon" style="width:34px;height:34px;border-radius:8px;object-fit:cover;flex-shrink:0;" alt="光鸭网盘">
       <div>
         <div class="brand-name">光鸭网盘 <span class="brand-badge">fnOS</span></div>
-        <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">飞牛 NAS 客户端</div>
+        <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">飞牛 NAS 客户端 · by chaos</div>
       </div>
     </div>
 
@@ -1001,7 +1001,7 @@ HTML_PAGE = """<!DOCTYPE html>
       <div class="mobile-header-top">
         <div class="mobile-brand">
           <img src="/icon.png?v=1.0.4" class="mobile-brand-img" style="width:26px;height:26px;border-radius:6px;object-fit:cover;flex-shrink:0;" alt="光鸭网盘">
-          <span>光鸭网盘 <span class="brand-badge" style="font-size:10px;">fnOS</span></span>
+          <span>光鸭网盘 <span class="brand-badge" style="font-size:10px;">by chaos</span></span>
         </div>
         <div class="mobile-header-tools">
           <button class="btn-secondary btn-icon" id="mobileThemeBtn" onclick="toggleTheme()" title="切换日夜模式">🌙</button>
@@ -1118,7 +1118,7 @@ HTML_PAGE = """<!DOCTYPE html>
         <div class="setting-row">
           <div>
             <div style="font-weight: 600;">默认下载保存路径</div>
-            <div class="setting-desc">网盘文件直接下载保存到该 NAS 目录。系统将自动配置 <code>1000:1001 (lawzhou)</code> 用户与 <code>777</code> 完整读写权限，手机端与飞牛文件管理器可直接访问。</div>
+            <div class="setting-desc">网盘文件直接下载保存到该 NAS 目录。系统将自动配置目录权限（<code>777</code> 完整读写权限），手机端与飞牛文件管理器可直接访问。</div>
           </div>
         </div>
         <div style="display: flex; gap: 10px; margin-top: 10px;">
@@ -1159,6 +1159,19 @@ HTML_PAGE = """<!DOCTYPE html>
           </div>
           <div>
             <span class="status-badge status-success">已配置</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="setting-card">
+        <div class="setting-card-title">ℹ️ 套件信息与署名</div>
+        <div class="setting-row">
+          <div>
+            <div style="font-weight: 600;">光鸭网盘 fnOS 原生适配版</div>
+            <div class="setting-desc">版本: v1.0.3 · 开发者 / 维护者: <b>chaos</b></div>
+          </div>
+          <div>
+            <span class="status-badge" style="background: rgba(255, 122, 0, 0.15); color: var(--accent);">chaos</span>
           </div>
         </div>
       </div>
