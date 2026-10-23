@@ -355,8 +355,7 @@ HTML_PAGE = """<!DOCTYPE html>
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: space-between;
-      padding: 14px 0 16px 0;
+      padding: 8px 0 16px 0;
       user-select: none;
       z-index: 100;
       flex-shrink: 0;
@@ -367,13 +366,14 @@ HTML_PAGE = """<!DOCTYPE html>
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 16px;
+      justify-content: center;
       width: 100%;
+      height: 48px;
     }
 
     .rail-brand-logo {
-      width: 40px;
-      height: 40px;
+      width: 38px;
+      height: 38px;
       border-radius: 10px;
       cursor: pointer;
       display: flex;
@@ -389,9 +389,11 @@ HTML_PAGE = """<!DOCTYPE html>
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 6px;
+      gap: 8px;
       width: 100%;
       padding: 0 8px;
+      margin-top: 28px;
+      flex: 1;
     }
 
     .rail-btn {
@@ -469,6 +471,7 @@ HTML_PAGE = """<!DOCTYPE html>
       align-items: center;
       gap: 12px;
       width: 100%;
+      margin-top: auto;
     }
 
     .rail-theme-btn {
@@ -1625,7 +1628,7 @@ HTML_PAGE = """<!DOCTYPE html>
       </div>
     </div>
 
-    <!-- Middle Menu Items -->
+    <!-- Middle Menu Items (4 Core Buttons) -->
     <div class="rail-menu">
       <div class="rail-btn active" id="navFiles" onclick="switchView('files')" title="全部文件">
         <div class="rail-btn-icon">
@@ -1646,17 +1649,6 @@ HTML_PAGE = """<!DOCTYPE html>
         </div>
         <span class="rail-btn-label">云添加</span>
         <span class="rail-badge" id="cloudTaskBadge" style="display: none;">0</span>
-      </div>
-
-      <div class="rail-btn" id="navTransfers" onclick="switchView('transfers')" title="传输列表 (NAS本地)">
-        <div class="rail-btn-icon">
-          <!-- ComputerDownload SVG -->
-          <svg width="20" height="20" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path fill="currentColor" d="M2.5 13.5a.75.75 0 0 0 0 1.5h13a.75.75 0 0 0 0-1.5zM9 2.25a.75.75 0 0 1 .75.75v6.44l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.22 2.22V3a.75.75 0 0 1 .75-.75"/>
-          </svg>
-        </div>
-        <span class="rail-btn-label">传输</span>
-        <span class="rail-badge" id="activeDlBadge" style="display: none;">0</span>
       </div>
 
       <div class="rail-btn" id="navTrash" onclick="switchView('trash')" title="回收站">
@@ -1744,6 +1736,14 @@ HTML_PAGE = """<!DOCTYPE html>
             </div>
           </div>
         </div>
+
+        <!-- Transfers / Download Button in Header -->
+        <button class="btn-icon" id="topTransfersBtn" onclick="switchView('transfers')" title="传输与下载任务" style="position: relative;">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path fill="currentColor" d="M2.5 13.5a.75.75 0 0 0 0 1.5h13a.75.75 0 0 0 0-1.5zM9 2.25a.75.75 0 0 1 .75.75v6.44l2.22-2.22a.75.75 0 1 1 1.06 1.06l-3.5 3.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.22 2.22V3a.75.75 0 0 1 .75-.75"/>
+          </svg>
+          <span class="rail-badge" id="activeDlBadge" style="display: none; top: -3px; right: -5px; min-width: 14px; height: 14px; font-size: 9px; padding: 0 3px;">0</span>
+        </button>
 
         <!-- Refresh Button -->
         <button class="btn-icon" onclick="refreshCurrentView()" title="刷新当前页面">
@@ -1947,37 +1947,43 @@ HTML_PAGE = """<!DOCTYPE html>
 </div>
 
 <div class="modal-backdrop" id="downloadConfirmModal">
-    <div class="modal" style="width: 540px;">
-      <div class="modal-header">
-        <span>⬇️ 下载文件到 NAS</span>
+    <div class="modal" style="width: 600px; max-width: 95vw; border-radius: 16px; padding: 22px 24px;">
+      <div class="modal-header" style="border-bottom: 1px solid var(--border-subtle); padding-bottom: 12px; margin-bottom: 16px;">
+        <div style="display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 16px;">
+          <span style="font-size: 18px;">⬇️</span>
+          <span>下载文件到 NAS</span>
+        </div>
         <button class="close-btn" onclick="closeModal('downloadConfirmModal')">&times;</button>
       </div>
       <div>
-        <div style="margin-bottom: 14px;">
-          <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 4px;">下载文件：</div>
-          <div style="font-weight: 600; font-size: 15px; word-break: break-all;" id="dlConfirmFileName">--</div>
+        <div style="margin-bottom: 16px;">
+          <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px; font-weight: 500;">下载文件：</div>
+          <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 10px 14px; display: flex; align-items: center; gap: 10px;">
+            <span style="font-size: 20px; flex-shrink: 0;">📦</span>
+            <div style="font-weight: 500; font-size: 13px; line-height: 1.5; color: var(--text-main); word-break: break-all; flex: 1;" id="dlConfirmFileName">--</div>
+          </div>
         </div>
 
         <div style="margin-bottom: 16px;">
-          <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 6px;">选择 NAS 保存目录：</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px; font-weight: 500;">选择 NAS 保存目录：</div>
           <div style="display: flex; gap: 8px;">
-            <input type="text" id="dlConfirmPathInput" style="flex: 1;" readonly onclick="openFolderPicker(onDlConfirmFolderPicked)">
-            <button class="btn-secondary" onclick="openFolderPicker(onDlConfirmFolderPicked)">📂 浏览目录</button>
+            <input type="text" id="dlConfirmPathInput" style="flex: 1; height: 38px; font-size: 13px;" readonly onclick="openFolderPicker(onDlConfirmFolderPicked)">
+            <button class="btn-secondary" onclick="openFolderPicker(onDlConfirmFolderPicked)" style="height: 38px; padding: 0 16px;">📂 浏览目录</button>
           </div>
-          <div style="font-size: 12px; color: var(--text-dim); margin-top: 6px;">
-            提示：可下载至 NAS 任意存储卷或共享文件夹（如 照片、电影、临时文件等）。
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px; line-height: 1.5;">
+            💡 提示：可自由下载至 NAS 任意存储卷或共享文件夹（如 影视、下载、照片等）。
           </div>
         </div>
 
-        <div style="display: flex; align-items: center; gap: 8px; margin-top: 10px;">
-          <input type="checkbox" id="setAsDefaultDirCheckbox">
-          <label for="setAsDefaultDirCheckbox" style="font-size: 13px; color: var(--text-muted); cursor: pointer;">将该目录设为以后的默认下载路径</label>
+        <div style="display: flex; align-items: center; gap: 8px; margin-top: 14px; padding: 8px 12px; background: var(--bg-subtle); border-radius: 8px; border: 1px solid var(--border-subtle);">
+          <input type="checkbox" id="setAsDefaultDirCheckbox" style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--brand);">
+          <label for="setAsDefaultDirCheckbox" style="font-size: 12.5px; color: var(--text-main); cursor: pointer; user-select: none;">将该目录设为以后的默认下载路径</label>
         </div>
       </div>
 
-      <div class="modal-footer">
-        <button class="btn-secondary" onclick="closeModal('downloadConfirmModal')">取消</button>
-        <button class="btn-primary" onclick="confirmStartDownload()">立即下载到 NAS</button>
+      <div class="modal-footer" style="margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end; gap: 10px;">
+        <button class="btn-secondary" onclick="closeModal('downloadConfirmModal')" style="padding: 8px 20px;">取消</button>
+        <button class="btn-primary" onclick="confirmStartDownload()" style="padding: 8px 24px;">立即下载到 NAS</button>
       </div>
     </div>
   </div>
@@ -2428,26 +2434,31 @@ HTML_PAGE = """<!DOCTYPE html>
 
     function switchView(viewName) {
       currentView = viewName;
-      document.querySelectorAll(".nav-item").forEach(el => el.classList.remove("active"));
+      document.querySelectorAll(".rail-btn").forEach(el => el.classList.remove("active"));
       document.querySelectorAll(".content-view").forEach(el => el.classList.remove("active"));
+      document.getElementById("topTransfersBtn")?.classList.remove("active");
 
       if (viewName === 'files') {
-        document.getElementById("navFiles").classList.add("active");
-        document.getElementById("view-files").classList.add("active");
+        document.getElementById("navFiles")?.classList.add("active");
+        document.getElementById("view-files")?.classList.add("active");
         updateBreadcrumbs();
       } else if (viewName === 'transfers') {
-        document.getElementById("navTransfers").classList.add("active");
-        document.getElementById("view-transfers").classList.add("active");
+        document.getElementById("topTransfersBtn")?.classList.add("active");
+        document.getElementById("view-transfers")?.classList.add("active");
         document.getElementById("breadcrumbs").innerHTML = `<span class="crumb-item current">⬇️ 本地下载与传输任务</span>`;
         loadTransfers();
       } else if (viewName === 'offline') {
-        document.getElementById("navOffline").classList.add("active");
-        document.getElementById("view-offline").classList.add("active");
+        document.getElementById("navOffline")?.classList.add("active");
+        document.getElementById("view-offline")?.classList.add("active");
         document.getElementById("breadcrumbs").innerHTML = `<span class="crumb-item current">⚡ 云端离线下载 (磁力/BT)</span>`;
         loadCloudTasks();
+      } else if (viewName === 'trash') {
+        document.getElementById("navTrash")?.classList.add("active");
+        document.getElementById("view-trash")?.classList.add("active");
+        document.getElementById("breadcrumbs").innerHTML = `<span class="crumb-item current">🗑️ 回收站</span>`;
       } else if (viewName === 'settings') {
-        document.getElementById("navSettings").classList.add("active");
-        document.getElementById("view-settings").classList.add("active");
+        document.getElementById("navSettings")?.classList.add("active");
+        document.getElementById("view-settings")?.classList.add("active");
         document.getElementById("breadcrumbs").innerHTML = `<span class="crumb-item current">⚙️ 系统设置</span>`;
         loadSettings();
       }
@@ -2457,6 +2468,7 @@ HTML_PAGE = """<!DOCTYPE html>
       if (currentView === 'files') loadFiles(currentParentId);
       else if (currentView === 'transfers') loadTransfers();
       else if (currentView === 'offline') loadCloudTasks();
+      else if (currentView === 'trash') switchView('trash');
       else if (currentView === 'settings') loadSettings();
     }
 
