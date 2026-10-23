@@ -1268,27 +1268,44 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- Modal: NAS Folder Picker (Issue 2) -->
+  <!-- Modal: NAS Folder Picker (Enhanced with All Shares & Intelligent Navigation) -->
   <div class="modal-backdrop" id="folderPickerModal">
-    <div class="modal" style="width: 650px;">
+    <div class="modal" style="width: 650px; max-width: 95vw;">
       <div class="modal-header">
-        <span>📂 选择 NAS 文件夹</span>
+        <span>📂 选择 NAS 保存目录</span>
         <button class="close-btn" onclick="closeModal('folderPickerModal')">&times;</button>
       </div>
       
-      <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
-        <input type="text" id="folderPickerCurrentPath" readonly style="flex: 1; font-family: monospace; font-size: 13px;">
-        <button class="btn-outline btn-sm" onclick="folderPickerGoUp()">⬆️ 上一级</button>
-        <button class="btn-secondary btn-sm" onclick="folderPickerMkdir()">➕ 新建文件夹</button>
-      </div>
-
-      <div class="fs-browser-list" id="folderPickerList">
+      <!-- Breadcrumb navigation -->
+      <div id="folderPickerBreadcrumbs" style="display: flex; align-items: center; gap: 4px; font-size: 12.5px; margin-bottom: 8px; overflow-x: auto; white-space: nowrap; padding: 4px 0; color: var(--text-muted);">
         <!-- populated by js -->
       </div>
 
-      <div class="modal-footer">
-        <button class="btn-secondary" onclick="closeModal('folderPickerModal')">取消</button>
-        <button class="btn-primary" onclick="confirmFolderPicker()">确定选择该目录</button>
+      <!-- Quick Shortcuts -->
+      <div style="display: flex; gap: 6px; margin-bottom: 10px; overflow-x: auto; white-space: nowrap;">
+        <button class="btn-outline btn-sm" onclick="loadFolderPickerList('')">🏠 全部共享文件夹</button>
+        <button class="btn-outline btn-sm" onclick="loadFolderPickerList('/vol1/1000')">👤 默认主空间 (/vol1/1000)</button>
+        <button class="btn-outline btn-sm" onclick="loadFolderPickerList(defaultDownloadDir)">📦 当前预设目录</button>
+      </div>
+
+      <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+        <input type="text" id="folderPickerCurrentPath" readonly style="flex: 1; font-family: monospace; font-size: 12.5px;" placeholder="当前选定路径...">
+        <button class="btn-outline btn-sm" onclick="folderPickerGoUp()">⬆️ 上一级</button>
+        <button class="btn-secondary btn-sm" onclick="folderPickerMkdir()">➕ 新建子文件夹</button>
+      </div>
+
+      <div class="fs-browser-list" id="folderPickerList" style="min-height: 200px; max-height: 340px;">
+        <!-- populated by js -->
+      </div>
+
+      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
+        <div style="font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 380px;">
+          选定: <span id="folderPickerFooterPath" style="color: var(--primary); font-family: monospace;">--</span>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn-secondary" onclick="closeModal('folderPickerModal')">取消</button>
+          <button class="btn-primary" onclick="confirmFolderPicker()">确定选择该目录</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1709,14 +1726,58 @@ HTML_PAGE = """<!DOCTYPE html>
     // ================= NAS FOLDER PICKER =================
     function openFolderPicker(callback, initialPath) {
       folderPickerCallback = callback;
-      folderPickerPath = initialPath || defaultDownloadDir || "/vol1/1000";
-      folderPickerSelectedPath = folderPickerPath;
+      const target = initialPath || defaultDownloadDir || "/vol1/1000";
+      folderPickerSelectedPath = target;
+      folderPickerPath = "";
       openModal("folderPickerModal");
-      loadFolderPickerList(folderPickerPath);
+      // Load root "" so all NAS shared folders across all volumes are immediately visible
+      loadFolderPickerList("");
+    }
+
+    function updateFolderPickerBreadcrumbs(path) {
+      const el = document.getElementById("folderPickerBreadcrumbs");
+      if (!el) return;
+      if (!path) {
+        el.innerHTML = `<span class="crumb-item current" style="cursor: pointer;" onclick="loadFolderPickerList('')">🏠 全部共享文件夹与存储卷</span>`;
+        return;
+      }
+      let html = `<span class="crumb-link" style="color: var(--primary); cursor: pointer;" onclick="loadFolderPickerList('')">🏠 根目录</span>`;
+      const parts = path.split("/").filter(Boolean);
+      let accumulated = "";
+      for (let i = 0; i < parts.length; i++) {
+        accumulated += "/" + parts[i];
+        const isLast = (i === parts.length - 1);
+        const p = accumulated;
+        if (isLast) {
+          html += ` <span style="color: var(--text-dim); margin: 0 4px;">/</span> <span class="crumb-item current" style="font-weight: 600; color: var(--text);">${escapeHtml(parts[i])}</span>`;
+        } else {
+          html += ` <span style="color: var(--text-dim); margin: 0 4px;">/</span> <span class="crumb-link" style="color: var(--primary); cursor: pointer;" onclick="loadFolderPickerList('${escapeHtml(p)}')">${escapeHtml(parts[i])}</span>`;
+        }
+      }
+      el.innerHTML = html;
+    }
+
+    function selectFolderPickerItem(path) {
+      folderPickerSelectedPath = path;
+      document.getElementById("folderPickerCurrentPath").value = path;
+      const footerEl = document.getElementById("folderPickerFooterPath");
+      if (footerEl) footerEl.innerText = path;
+      document.querySelectorAll(".fs-folder-item").forEach(el => {
+        if (el.dataset.path === path) {
+          el.classList.add("selected");
+        } else {
+          el.classList.remove("selected");
+        }
+      });
     }
 
     async function loadFolderPickerList(path) {
-      document.getElementById("folderPickerCurrentPath").value = path;
+      folderPickerPath = path;
+      document.getElementById("folderPickerCurrentPath").value = path || folderPickerSelectedPath || "";
+      const footerEl = document.getElementById("folderPickerFooterPath");
+      if (footerEl) footerEl.innerText = folderPickerSelectedPath || path || "--";
+      updateFolderPickerBreadcrumbs(path);
+
       const container = document.getElementById("folderPickerList");
       container.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 24px;">加载中...</div>`;
 
@@ -1724,26 +1785,46 @@ HTML_PAGE = """<!DOCTYPE html>
         const res = await fetch(`/api/fs/browse?path=${encodeURIComponent(path)}`);
         const json = await res.json();
         const folders = json.folders || [];
-        folderPickerPath = json.currentPath || path;
-        folderPickerSelectedPath = folderPickerPath;
+        folderPickerPath = json.currentPath !== undefined ? json.currentPath : path;
 
         if (folders.length === 0) {
-          container.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 24px;">（当前目录下无子文件夹，可点击右上角新建）</div>`;
+          const folderName = path.split("/").filter(Boolean).pop() || "此目录";
+          folderPickerSelectedPath = path;
+          document.getElementById("folderPickerCurrentPath").value = path;
+          if (footerEl) footerEl.innerText = path;
+          container.innerHTML = `
+            <div style="text-align: center; padding: 28px 16px; color: var(--text-muted);">
+              <div style="font-size: 32px; margin-bottom: 6px;">📂</div>
+              <div style="font-size: 14.5px; font-weight: 600; color: var(--text);">已就绪保存目录：<span style="color: var(--primary);">${escapeHtml(folderName)}</span></div>
+              <div style="font-size: 12.5px; margin-top: 6px; color: var(--text-dim); line-height: 1.6;">
+                当前文件夹下没有更深层的子文件夹。<br>您可直接点击下方【确定选择该目录】保存到此处，或点击右上角新建子文件夹。
+              </div>
+              <div style="margin-top: 14px; display: flex; gap: 8px; justify-content: center;">
+                <button class="btn-primary btn-sm" style="padding: 6px 16px;" onclick="confirmFolderPicker()">✅ 确定选择该目录</button>
+                <button class="btn-outline btn-sm" style="padding: 6px 16px;" onclick="folderPickerGoUp()">⬆️ 返回上一级</button>
+              </div>
+            </div>
+          `;
           return;
         }
 
         container.innerHTML = "";
         folders.forEach(f => {
           const div = document.createElement("div");
-          div.className = "fs-folder-item";
+          const isSelected = (f.path === folderPickerSelectedPath);
+          div.className = "fs-folder-item" + (isSelected ? " selected" : "");
+          div.dataset.path = f.path;
           div.innerHTML = `
-            <div class="fs-folder-left">
-              <span>📁</span>
-              <span>${escapeHtml(f.name)}</span>
+            <div class="fs-folder-left" style="flex: 1; min-width: 0;" onclick="selectFolderPickerItem('${escapeHtml(f.path)}')">
+              <span style="font-size: 16px; flex-shrink: 0;">📁</span>
+              <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: ${f.is_share ? '600' : '400'};" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
             </div>
-            <span style="font-size: 11px; color: var(--text-dim);">点击进入</span>
+            <div style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
+              <button class="btn-primary btn-sm" style="padding: 3px 8px; font-size: 11.5px;" onclick="event.stopPropagation(); selectFolderPickerItem('${escapeHtml(f.path)}'); confirmFolderPicker();">选择</button>
+              <button class="btn-outline btn-sm" style="padding: 3px 8px; font-size: 11.5px;" onclick="event.stopPropagation(); loadFolderPickerList('${escapeHtml(f.path)}')">进入 ➔</button>
+            </div>
           `;
-          div.onclick = () => {
+          div.ondblclick = () => {
             loadFolderPickerList(f.path);
           };
           container.appendChild(div);
@@ -1754,20 +1835,24 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     function folderPickerGoUp() {
-      if (folderPickerPath === "/vol1/1000") {
-        loadFolderPickerList("/vol1");
-      } else if (folderPickerPath === "/vol1" || folderPickerPath === "") {
+      if (!folderPickerPath || folderPickerPath === "" || folderPickerPath === "/") {
+        return;
+      }
+      const parts = folderPickerPath.split("/").filter(Boolean);
+      if (parts.length <= 1) {
         loadFolderPickerList("");
       } else {
-        const parent = folderPickerPath.substring(0, folderPickerPath.lastIndexOf("/"));
-        loadFolderPickerList(parent || "/vol1");
+        parts.pop();
+        const parent = "/" + parts.join("/");
+        loadFolderPickerList(parent);
       }
     }
 
     async function folderPickerMkdir() {
-      const name = prompt(`在 ${folderPickerPath} 下新建文件夹名称：`);
+      const targetDir = folderPickerPath || folderPickerSelectedPath || "/vol1/1000";
+      const name = prompt(`在 ${targetDir} 下新建文件夹名称：`);
       if (!name || !name.trim()) return;
-      const newPath = folderPickerPath + "/" + name.trim();
+      const newPath = (targetDir.endsWith("/") ? targetDir : targetDir + "/") + name.trim();
       try {
         const res = await fetch("/api/fs/mkdir", {
           method: "POST",
@@ -1777,7 +1862,7 @@ HTML_PAGE = """<!DOCTYPE html>
         const d = await res.json();
         if (d.success) {
           showToast("新建文件夹成功");
-          loadFolderPickerList(folderPickerPath);
+          loadFolderPickerList(targetDir);
         } else {
           alert("新建失败: " + (d.error || JSON.stringify(d)));
         }
@@ -1787,8 +1872,9 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     function confirmFolderPicker() {
+      const chosen = folderPickerSelectedPath || folderPickerPath || defaultDownloadDir || "/vol1/1000";
       if (folderPickerCallback) {
-        folderPickerCallback(folderPickerPath);
+        folderPickerCallback(chosen);
       }
       closeModal("folderPickerModal");
     }
@@ -2758,17 +2844,38 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/fs/browse":
             target_path = query.get("path", [""])[0].strip()
-            # If path is empty, return top-level volumes and user directory
+            # If path is empty, return all user shared folders and storage volumes
             if not target_path:
                 folders = []
-                if os.path.exists("/vol1/1000"):
-                    folders.append({"name": "我的个人文件空间 (/vol1/1000)", "path": "/vol1/1000"})
-                if os.path.exists("/vol1"):
-                    folders.append({"name": "存储卷 1 (/vol1)", "path": "/vol1"})
-                for v in range(2, 9):
+                # 1. Collect all user shared folders across all storage volumes
+                shared_folders = []
+                for v in range(1, 9):
+                    user_dir = f"/vol{v}/1000"
+                    if os.path.exists(user_dir):
+                        try:
+                            with os.scandir(user_dir) as it:
+                                for entry in it:
+                                    if entry.is_dir(follow_symlinks=True) and not entry.name.startswith((".", "@")):
+                                        v_label = f"存储卷 {v}" if v > 1 else "默认存储空间"
+                                        shared_folders.append({
+                                            "name": f"{entry.name}  [{v_label}]",
+                                            "path": entry.path.replace("\\", "/"),
+                                            "is_share": True
+                                        })
+                        except Exception:
+                            pass
+                shared_folders.sort(key=lambda x: x["name"].lower())
+                folders.extend(shared_folders)
+
+                # 2. Add raw volume mounts
+                for v in range(1, 9):
                     vpath = f"/vol{v}"
                     if os.path.exists(vpath):
-                        folders.append({"name": f"存储卷 {v} ({vpath})", "path": vpath})
+                        folders.append({
+                            "name": f"💽 存储卷 {v} 完整根目录 ({vpath})",
+                            "path": vpath,
+                            "is_volume": True
+                        })
                 self._send_json({"currentPath": "", "folders": folders})
                 return
 
@@ -2784,8 +2891,13 @@ class RequestHandler(BaseHTTPRequestHandler):
                             if entry.is_dir(follow_symlinks=True):
                                 if entry.name.startswith("."):
                                     continue
+                                disp_name = entry.name
+                                if disp_name == "1000":
+                                    disp_name = "1000 (个人存储空间)"
+                                elif disp_name == "1001":
+                                    disp_name = "1001 (副账户空间)"
                                 folders.append({
-                                    "name": entry.name,
+                                    "name": disp_name,
                                     "path": entry.path.replace("\\", "/")
                                 })
                         except Exception:
