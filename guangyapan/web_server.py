@@ -10,7 +10,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from .client import GuangyapanClient
 from .downloader import FileDownloader, fix_permissions, format_size, format_speed
 
-APP_VERSION = "1.0.6"
+APP_VERSION = "1.0.5"
 GITHUB_REPO_URL = "https://github.com/lawzhougc/guangyapan-fnos"
 _VERSION_CACHE = {"last_check": 0, "data": None}
 
@@ -214,9 +214,9 @@ HTML_PAGE = """<!DOCTYPE html>
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>光鸭网盘 · 飞牛系统 (fnOS) 客户端</title>
-  <link rel="icon" type="image/x-icon" href="/favicon.ico?v=1.0.6">
-  <link rel="icon" type="image/png" sizes="32x32" href="/icon.png?v=1.0.6">
-  <link rel="apple-touch-icon" href="/icon.png?v=1.0.6">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico?v=1.0.5">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icon.png?v=1.0.5">
+  <link rel="apple-touch-icon" href="/icon.png?v=1.0.5">
   <script src="/qrcode.min.js"></script>
   <style>
     :root {
@@ -794,27 +794,82 @@ HTML_PAGE = """<!DOCTYPE html>
     .cloud-file-row:last-child {
       border-bottom: none;
     }
-    .cloud-picker-folder-item {
+    /* Cloud Drive Save Destination Tree View (Replicating official Guangyapan Web) */
+    .cloud-tree-container {
+      height: 320px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg);
+      padding: 6px;
+      user-select: none;
+    }
+    .cloud-tree-node {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      padding: 9px 12px;
+      height: 38px;
+      padding: 0 10px;
       border-radius: 7px;
       cursor: pointer;
       transition: background 0.15s ease;
-      font-size: 13px;
-      margin-bottom: 3px;
+      font-size: 13.5px;
+      margin-bottom: 2px;
       border: 1px solid transparent;
-      user-select: none;
     }
-    .cloud-picker-folder-item:hover {
+    .cloud-tree-node:hover {
       background: var(--bg-hover);
     }
-    .cloud-picker-folder-item.selected {
-      background: rgba(255, 102, 0, 0.12);
-      border-color: rgba(255, 102, 0, 0.35);
+    .cloud-tree-node.selected {
+      background: var(--bg-subtle);
+      border-color: var(--border-subtle);
+      font-weight: 500;
+    }
+    .cloud-tree-arrow {
+      width: 22px;
+      height: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      color: var(--text-dim);
+      flex-shrink: 0;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background 0.15s ease;
+    }
+    .cloud-tree-arrow:hover {
+      background: var(--border-subtle);
       color: var(--text);
+    }
+    .cloud-tree-icon {
+      font-size: 16px;
+      margin-right: 8px;
+      flex-shrink: 0;
+    }
+    .cloud-tree-name {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+      color: var(--text);
+    }
+    .cloud-tree-check {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text);
+      margin-left: 8px;
+      flex-shrink: 0;
+    }
+    .cloud-tree-tag-default {
+      display: inline-block;
+      background: rgba(255, 102, 0, 0.12);
+      color: #ff6600;
+      font-size: 11px;
+      padding: 2px 7px;
+      border-radius: 4px;
       font-weight: 600;
+      flex-shrink: 0;
     }
 
     /* Folder Selector Component */
@@ -1161,7 +1216,7 @@ HTML_PAGE = """<!DOCTYPE html>
   <!-- Left Sidebar (Windows/fnOS Style) -->
   <aside id="sidebar">
     <div class="brand-box">
-      <img src="/icon.png?v=1.0.6" class="brand-icon" style="width:34px;height:34px;border-radius:8px;object-fit:cover;flex-shrink:0;" alt="光鸭网盘">
+      <img src="/icon.png?v=1.0.5" class="brand-icon" style="width:34px;height:34px;border-radius:8px;object-fit:cover;flex-shrink:0;" alt="光鸭网盘">
       <div>
         <div class="brand-name">光鸭网盘 <span class="brand-badge">fnOS</span></div>
         <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">飞牛 NAS 客户端 · by chaos</div>
@@ -1225,7 +1280,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <header>
       <div class="mobile-header-top">
         <div class="mobile-brand">
-          <img src="/icon.png?v=1.0.6" class="mobile-brand-img" style="width:26px;height:26px;border-radius:6px;object-fit:cover;flex-shrink:0;" alt="光鸭网盘">
+          <img src="/icon.png?v=1.0.5" class="mobile-brand-img" style="width:26px;height:26px;border-radius:6px;object-fit:cover;flex-shrink:0;" alt="光鸭网盘">
           <span>光鸭网盘 <span class="brand-badge" style="font-size:10px;">by chaos</span></span>
         </div>
         <div class="mobile-header-tools">
@@ -1396,7 +1451,7 @@ HTML_PAGE = """<!DOCTYPE html>
           <div>
             <div style="font-weight: 600; font-size: 14.5px;">光鸭网盘 fnOS 原生适配版</div>
             <div class="setting-desc" style="margin-top: 4px;">
-              当前版本：<span id="aboutCurrentVersion" style="font-weight: 600; color: var(--text);">v1.0.6</span> · 开发者 / 维护者：<b>chaos</b>
+              当前版本：<span id="aboutCurrentVersion" style="font-weight: 600; color: var(--text);">v1.0.5</span> · 开发者 / 维护者：<b>chaos</b>
             </div>
           </div>
           <div>
@@ -1628,41 +1683,109 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- Modal: Cloud Drive Destination Folder Picker (选择下载到网盘具体位置) -->
+  <!-- Modal: Cloud Drive Destination Folder Picker (保存到 - 复刻光鸭网页版树状目录) -->
   <div class="modal-backdrop" id="cloudFolderPickerModal" style="z-index: 1050;">
-    <div class="modal" style="width: 540px; max-width: 95vw; border-radius: 14px; padding: 22px;">
-      <div class="modal-header" style="border-bottom: 1px solid var(--border-subtle); padding-bottom: 12px; margin-bottom: 12px;">
-        <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px;">
-          <span>📁</span>
-          <span>选择保存到网盘的位置</span>
+    <div class="modal" style="width: 560px; max-width: 95vw; border-radius: 14px; padding: 22px;">
+      <!-- Header -->
+      <div class="modal-header" style="border-bottom: 1px solid var(--border-subtle); padding-bottom: 14px; margin-bottom: 14px;">
+        <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px;">
+          <span style="font-size: 18px;">☁️</span>
+          <span>保存到</span>
         </div>
         <button class="close-btn" onclick="closeModal('cloudFolderPickerModal')">&times;</button>
       </div>
 
-      <!-- Cloud Breadcrumb & Mkdir -->
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 8px;">
-        <div id="cloudPickerBreadcrumbs" style="display: flex; align-items: center; gap: 4px; font-size: 12.5px; flex: 1; overflow-x: auto; white-space: nowrap; padding: 4px 0;">
-          <!-- Populated by JS -->
+      <!-- Current Location & Restore Default Row -->
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px;">
+        <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; font-size: 13px;">
+          <span style="color: var(--text-dim); flex-shrink: 0;">当前位置：</span>
+          <span id="cloudTreeCurrentPath" style="color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1;">全部文件/来自: 云添加</span>
+          <span id="cloudTreeDefaultBadge" class="cloud-tree-tag-default">默认</span>
         </div>
-        <button class="btn-outline btn-sm" onclick="promptCreateCloudPickerFolder()" style="padding: 4px 10px; font-size: 12px; flex-shrink: 0;">
-          + 新建文件夹
+        <button type="button" class="btn-secondary" onclick="restoreDefaultCloudFolderTree()" style="padding: 7px 14px; font-size: 12.5px; flex-shrink: 0; border-radius: 8px;">恢复默认</button>
+      </div>
+
+      <!-- Tree Container -->
+      <div id="cloudFolderTreeContainer" class="cloud-tree-container">
+        <!-- Rendered by JS -->
+      </div>
+
+      <!-- Footer Buttons -->
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px; border-top: 1px solid var(--border-subtle); padding-top: 14px;">
+        <button type="button" class="btn-secondary" onclick="promptCreateFolderInTree()" style="display: flex; align-items: center; gap: 6px; padding: 8px 14px; font-size: 13px; border-radius: 8px;">
+          <span style="font-size: 15px;">📁⁺</span>
+          <span>新建文件夹</span>
         </button>
-      </div>
-
-      <!-- Cloud Folders List Container -->
-      <div id="cloudPickerFolderListContainer" style="max-height: 270px; min-height: 180px; overflow-y: auto; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-subtle); padding: 4px;">
-        <!-- Populated by JS -->
-      </div>
-
-      <!-- Cloud Picker Footer -->
-      <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; border-top: 1px solid var(--border-subtle); padding-top: 12px;">
-        <div style="font-size: 12.5px; color: var(--text-dim); max-width: 270px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-          当前选择: <span id="cloudPickerSelectedPathText" style="font-weight: 600; color: #ff6600;">全部文件</span>
+        <div style="display: flex; gap: 10px;">
+          <button type="button" class="btn-secondary" onclick="closeModal('cloudFolderPickerModal')" style="padding: 8px 20px; font-size: 13px; border-radius: 8px;">取消</button>
+          <button type="button" class="btn-guangya-orange" onclick="confirmCloudFolderTreeSelection()" style="padding: 8px 24px; font-size: 13px; border-radius: 8px; font-weight: 600;">确定</button>
         </div>
-        <div style="display: flex; gap: 8px;">
-          <button class="btn-secondary btn-sm" onclick="closeModal('cloudFolderPickerModal')">取消</button>
-          <button class="btn-guangya-orange btn-sm" style="padding: 6px 16px;" onclick="confirmCloudFolderPicker()">✅ 确定选择该目录</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Delete Cloud Offline Task Confirmation (删除离线任务) -->
+  <div class="modal-backdrop" id="deleteCloudTaskModal" style="z-index: 1060;">
+    <div class="modal" style="width: 440px; max-width: 95vw; border-radius: 14px; padding: 22px;">
+      <div class="modal-header" style="border-bottom: 1px solid var(--border-subtle); padding-bottom: 12px; margin-bottom: 14px;">
+        <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; color: #ef4444;">
+          <span>🗑️</span>
+          <span>删除离线任务</span>
         </div>
+        <button class="close-btn" onclick="closeModal('deleteCloudTaskModal')">&times;</button>
+      </div>
+      <div>
+        <div style="font-size: 14px; color: var(--text); margin-bottom: 12px; word-break: break-all;">
+          确定要从光鸭网盘中删除离线任务：<br>
+          <strong id="deleteCloudTaskName" style="color: var(--text); display: inline-block; margin-top: 6px;">--</strong>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; margin: 16px 0; padding: 10px 12px; background: var(--bg-subtle); border-radius: 8px; border: 1px solid var(--border);">
+          <input type="checkbox" id="deleteCloudFileCheckbox" style="cursor: pointer; width: 16px; height: 16px;">
+          <label for="deleteCloudFileCheckbox" style="font-size: 13px; color: var(--text); cursor: pointer; user-select: none;">
+            同时删除网盘已下载的对应文件
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+        <button class="btn-secondary" onclick="closeModal('deleteCloudTaskModal')">取消</button>
+        <button class="btn-danger" id="confirmDeleteCloudTaskBtn" onclick="confirmDeleteCloudTask()" style="padding: 7px 18px; border-radius: 8px; background: #ef4444; color: white; border: none; font-weight: 600; cursor: pointer;">确定删除</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Duplicate File Warning (NAS 本地文件已存在提示) -->
+  <div class="modal-backdrop" id="duplicateFileModal" style="z-index: 1060;">
+    <div class="modal" style="width: 480px; max-width: 95vw; border-radius: 14px; padding: 22px;">
+      <div class="modal-header" style="border-bottom: 1px solid var(--border-subtle); padding-bottom: 12px; margin-bottom: 14px;">
+        <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; color: #f59e0b;">
+          <span>⚠️</span>
+          <span>目标文件已存在</span>
+        </div>
+        <button class="close-btn" onclick="closeModal('duplicateFileModal')">&times;</button>
+      </div>
+      <div>
+        <div style="font-size: 13.5px; color: var(--text); margin-bottom: 10px;">
+          目标 NAS 目录中已存在同名文件：
+        </div>
+        <div id="duplicateFileNameDisplay" style="font-weight: 600; font-size: 14px; word-break: break-all; padding: 10px 12px; background: var(--bg-subtle); border-radius: 8px; border: 1px solid var(--border); margin-bottom: 12px; color: var(--text);">
+          --
+        </div>
+        <div style="font-size: 13px; color: var(--text-dim); margin-bottom: 18px;">
+          请选择处理方式：
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 10px;">
+        <button class="btn-primary" onclick="resolveDuplicateAndDownload('rename')" style="padding: 9px 16px; border-radius: 8px; font-weight: 500; text-align: left; display: flex; justify-content: space-between; align-items: center;">
+          <span>📄 保留两份（自动重命名）</span>
+          <span id="duplicateSuggestedNameBadge" style="font-size: 11.5px; opacity: 0.85;">--</span>
+        </button>
+        <button class="btn-secondary" onclick="resolveDuplicateAndDownload('overwrite')" style="padding: 9px 16px; border-radius: 8px; font-weight: 500; text-align: left; display: flex; justify-content: space-between; align-items: center; border-color: #f59e0b; color: var(--text);">
+          <span>⚠️ 覆盖原文件</span>
+          <span style="font-size: 11.5px; color: var(--text-dim);">原文件将被替换</span>
+        </button>
+        <button class="btn-secondary" onclick="closeModal('duplicateFileModal')" style="padding: 8px 16px; border-radius: 8px; font-weight: 500; text-align: center; margin-top: 4px;">
+          取消下载
+        </button>
       </div>
     </div>
   </div>
@@ -1704,7 +1827,7 @@ HTML_PAGE = """<!DOCTYPE html>
     <div class="modal" style="width: 460px; max-width: 95vw; overflow-y: auto;">
       <div class="modal-header">
         <div style="display: flex; align-items: center; gap: 8px;">
-          <img src="/icon.png?v=1.0.6" style="width: 26px; height: 26px; object-fit: contain; border-radius: 6px;">
+          <img src="/icon.png?v=1.0.5" style="width: 26px; height: 26px; object-fit: contain; border-radius: 6px;">
           <span>光鸭网盘 · 账号登录</span>
         </div>
         <button class="close-btn" onclick="closeLoginModal()">&times;</button>
@@ -2011,6 +2134,8 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById("dlConfirmPathInput").value = selectedPath;
     }
 
+    let duplicateContext = null;
+
     async function confirmStartDownload() {
       const targetDir = document.getElementById("dlConfirmPathInput").value.trim() || defaultDownloadDir;
       const setAsDefault = document.getElementById("setAsDefaultDirCheckbox").checked;
@@ -2024,16 +2149,51 @@ HTML_PAGE = """<!DOCTYPE html>
         });
       }
 
-      closeModal("downloadConfirmModal");
-      showToast("正在启动后台下载...");
+      // Check if file already exists in target NAS directory
+      try {
+        const checkRes = await fetch(`/api/fs/check-file?targetDir=${encodeURIComponent(targetDir)}&fileName=${encodeURIComponent(pendingDownloadFileName)}`);
+        const checkData = await checkRes.json();
+        if (checkData.exists) {
+          duplicateContext = {
+            fileId: pendingDownloadFileId,
+            originalFileName: pendingDownloadFileName,
+            suggestedFileName: checkData.suggestedName,
+            targetDir: targetDir
+          };
+          document.getElementById("duplicateFileNameDisplay").innerText = pendingDownloadFileName;
+          document.getElementById("duplicateSuggestedNameBadge").innerText = `新文件名: ${checkData.suggestedName}`;
+          closeModal("downloadConfirmModal");
+          openModal("duplicateFileModal");
+          return;
+        }
+      } catch (e) {
+        console.warn("Check file existence failed:", e);
+      }
 
+      closeModal("downloadConfirmModal");
+      executeDownload(pendingDownloadFileId, pendingDownloadFileName, targetDir);
+    }
+
+    function resolveDuplicateAndDownload(action) {
+      if (!duplicateContext) return;
+      const ctx = duplicateContext;
+      closeModal("duplicateFileModal");
+      if (action === "rename") {
+        executeDownload(ctx.fileId, ctx.suggestedFileName, ctx.targetDir);
+      } else if (action === "overwrite") {
+        executeDownload(ctx.fileId, ctx.originalFileName, ctx.targetDir);
+      }
+    }
+
+    async function executeDownload(fileId, fileName, targetDir) {
+      showToast("正在启动后台下载...");
       try {
         const res = await fetch("/api/download-task", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            fileId: pendingDownloadFileId,
-            fileName: pendingDownloadFileName,
+            fileId: fileId,
+            fileName: fileName,
             targetDir: targetDir
           })
         });
@@ -2398,16 +2558,20 @@ HTML_PAGE = """<!DOCTYPE html>
 
       container.innerHTML = "";
       list.forEach(t => {
-        // Guangyapan status 2 = finished
+        // Guangyapan status 2 = finished, 4 = paused, 3 = failed, 1 = downloading, 0 = waiting
         const isDone = (t.status === 2 || !!t.fileId);
         const isFailed = (t.status === 3 || !!t.errCode);
-        const isRunning = !isDone && !isFailed;
+        const isPaused = (t.status === 4);
+        const isRunning = !isDone && !isFailed && !isPaused;
 
         let badgeClass = "status-active";
         let badgeText = `下载中 ${t.progress || 0}%`;
         if (isDone) {
           badgeClass = "status-success";
           badgeText = "已完成";
+        } else if (isPaused) {
+          badgeClass = "status-warning";
+          badgeText = `已暂停 ${t.progress || 0}%`;
         } else if (isFailed) {
           badgeClass = "status-failed";
           badgeText = "任务失败";
@@ -2422,10 +2586,12 @@ HTML_PAGE = """<!DOCTYPE html>
               <span style="margin-right: 6px;">⚡</span>
               <span>${escapeHtml(t.fileName)}</span>
             </div>
-            <div style="display: flex; gap: 8px; align-items: center;">
+            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
               <span class="status-badge ${badgeClass}">${badgeText}</span>
+              ${isRunning ? `<button class="btn-secondary btn-sm" onclick="pauseOfflineTask('${t.taskId}')">⏸️ 暂停</button>` : ''}
+              ${(isFailed || isPaused) ? `<button class="btn-secondary btn-sm" onclick="retryOfflineTask('${t.taskId}')">▶️ 继续</button>` : ''}
               ${isDone && t.fileId ? `<button class="btn-primary btn-sm" onclick="promptStartDownload('${t.fileId}', '${escapeHtml(t.fileName)}')">⬇️<span class="desktop-text"> 下载到NAS</span><span class="mobile-text"> 下载</span></button>` : ''}
-              <button class="btn-outline btn-sm" onclick="deleteOfflineTask('${t.taskId}')">🗑️ 删除</button>
+              <button class="btn-outline btn-sm" onclick="promptDeleteOfflineTask('${t.taskId}', '${escapeHtml(t.fileName)}')">🗑️ 删除</button>
             </div>
           </div>
 
@@ -2448,19 +2614,85 @@ HTML_PAGE = """<!DOCTYPE html>
       });
     }
 
-    async function deleteOfflineTask(taskId) {
-      if (!confirm("确定要删除该离线任务记录吗？")) return;
+    async function pauseOfflineTask(taskId) {
       try {
-        await fetch("/api/cloud-add/delete", {
+        const res = await fetch("/api/cloud-add/pause", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ taskId })
+          body: JSON.stringify({ taskId: taskId })
         });
-        showToast("离线任务已删除");
-        loadCloudTasks();
+        const d = await res.json();
+        if (d.code === 128 || (d.error && d.error.includes("128"))) {
+          alert("光鸭网盘提示：该任务当前状态不支持客户端主动暂停");
+        } else if (d.error) {
+          alert("暂停任务失败: " + d.error);
+        } else {
+          showToast("已发送暂停请求");
+          loadCloudTasks();
+        }
       } catch (e) {
-        alert("删除失败: " + e.message);
+        alert("网络异常: " + e.message);
       }
+    }
+
+    async function retryOfflineTask(taskId) {
+      try {
+        const res = await fetch("/api/cloud-add/retry", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ taskId: taskId })
+        });
+        const d = await res.json();
+        if (d.error) {
+          alert("继续/重试任务失败: " + d.error);
+        } else {
+          showToast("已恢复下载任务");
+          loadCloudTasks();
+        }
+      } catch (e) {
+        alert("网络异常: " + e.message);
+      }
+    }
+
+    let pendingDeleteCloudTaskId = null;
+
+    function promptDeleteOfflineTask(taskId, fileName) {
+      pendingDeleteCloudTaskId = taskId;
+      document.getElementById("deleteCloudTaskName").innerText = fileName || taskId;
+      document.getElementById("deleteCloudFileCheckbox").checked = false;
+      openModal("deleteCloudTaskModal");
+    }
+
+    async function confirmDeleteCloudTask() {
+      if (!pendingDeleteCloudTaskId) return;
+      const deleteFile = document.getElementById("deleteCloudFileCheckbox").checked;
+      const btn = document.getElementById("confirmDeleteCloudTaskBtn");
+      btn.disabled = true;
+      btn.innerText = "正在删除...";
+      try {
+        const res = await fetch("/api/cloud-add/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ taskId: pendingDeleteCloudTaskId, deleteFile: deleteFile })
+        });
+        const d = await res.json();
+        if (d.error) {
+          alert("删除失败: " + d.error);
+        } else {
+          showToast("已成功删除离线任务" + (deleteFile ? "及网盘文件" : ""));
+          closeModal("deleteCloudTaskModal");
+          loadCloudTasks();
+        }
+      } catch (e) {
+        alert("网络异常: " + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = "确定删除";
+      }
+    }
+
+    async function deleteOfflineTask(taskId) {
+      promptDeleteOfflineTask(taskId, taskId);
     }
 
     // ================= VIEW: SETTINGS & ABOUT =================
@@ -2920,124 +3152,215 @@ HTML_PAGE = """<!DOCTYPE html>
       nextBtn.innerText = "下一步：解析任务 ➔";
     }
 
-    // ================= CLOUD DRIVE FOLDER PICKER =================
-    function openCloudFolderPickerModal() {
-      cloudPickerSelectedId = cloudAddTargetParentId;
-      cloudPickerSelectedPath = cloudAddTargetFolderPath;
-      document.getElementById("cloudPickerSelectedPathText").innerText = cloudPickerSelectedPath;
-      loadCloudPickerFolder(cloudAddTargetParentId || "");
-      openModal("cloudFolderPickerModal");
+    // ================= CLOUD DRIVE FOLDER TREE PICKER (保存到 - 复刻光鸭网页版树状结构) =================
+    let cloudTreeData = {}; // parentId -> [ { fileId, fileName, resType } ]
+    let cloudTreeExpanded = { "": true }; // folderId -> boolean
+    let cloudTreeSelectedId = "";
+    let cloudTreeSelectedPath = "全部文件";
+    let cloudDefaultTargetId = "";
+    let cloudDefaultTargetPath = "全部文件/来自: 云添加";
+    let cloudFolderParents = {}; // folderId -> { parentId, fileName }
+
+    function getCloudFolderPath(folderId) {
+      if (!folderId || folderId === "") return "全部文件";
+      const parts = [];
+      let curr = folderId;
+      while (curr && cloudFolderParents[curr]) {
+        parts.unshift(cloudFolderParents[curr].fileName);
+        curr = cloudFolderParents[curr].parentId;
+      }
+      return "全部文件" + (parts.length > 0 ? "/" + parts.join("/") : "");
     }
 
-    async function loadCloudPickerFolder(parentId, folderName = null) {
-      if (!parentId || parentId === "") {
-        cloudPickerBreadcrumbs = [{ id: "", name: "全部文件" }];
-      } else if (folderName) {
-        const existingIdx = cloudPickerBreadcrumbs.findIndex(b => b.id === parentId);
-        if (existingIdx !== -1) {
-          cloudPickerBreadcrumbs = cloudPickerBreadcrumbs.slice(0, existingIdx + 1);
-        } else {
-          cloudPickerBreadcrumbs.push({ id: parentId, name: folderName });
-        }
-      }
-
-      cloudPickerCurrentParentId = parentId;
-      const currentPathStr = cloudPickerBreadcrumbs.map(b => b.name).join("/");
-
-      // Render breadcrumbs
-      const bcContainer = document.getElementById("cloudPickerBreadcrumbs");
-      bcContainer.innerHTML = cloudPickerBreadcrumbs.map((b, idx) => {
-        const isLast = (idx === cloudPickerBreadcrumbs.length - 1);
-        if (isLast) {
-          return `<span style="font-weight: 600; color: var(--text);">${escapeHtml(b.name)}</span>`;
-        } else {
-          return `<span style="color: var(--primary); cursor: pointer;" onclick="loadCloudPickerFolder('${b.id}', '${escapeHtml(b.name)}')">${escapeHtml(b.name)}</span><span style="color: var(--text-dim); margin: 0 4px;">/</span>`;
-        }
-      }).join("");
-
-      // Render folder list
-      const container = document.getElementById("cloudPickerFolderListContainer");
-      container.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 30px;">正在读取网盘目录...</div>`;
-
+    async function loadTreeFolderChildren(parentId) {
+      if (cloudTreeData[parentId] !== undefined) return cloudTreeData[parentId];
       try {
         const res = await fetch(`/api/files?parentId=${encodeURIComponent(parentId)}`);
         const json = await res.json();
-        const folders = (json.list || []).filter(item => item.resType === 2);
-
-        container.innerHTML = "";
-
-        // Top action: select current folder directly
-        const currentItem = document.createElement("div");
-        const isCurrentActive = (cloudPickerSelectedId === parentId);
-        currentItem.className = "cloud-picker-folder-item" + (isCurrentActive ? " selected" : "");
-        currentItem.innerHTML = `
-          <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;" onclick="selectCloudPickerFolder('${parentId}', '${escapeHtml(currentPathStr)}')">
-            <span style="font-size: 16px;">📂</span>
-            <span style="font-weight: 500;">保存到当前目录: <span style="color: #ff6600;">${escapeHtml(currentPathStr)}</span></span>
-          </div>
-          <button class="btn-primary btn-sm" style="padding: 3px 10px; font-size: 12px;" onclick="event.stopPropagation(); selectCloudPickerFolder('${parentId}', '${escapeHtml(currentPathStr)}')">选中此处</button>
-        `;
-        container.appendChild(currentItem);
-
-        if (folders.length === 0) {
-          const emptyDiv = document.createElement("div");
-          emptyDiv.style.cssText = "text-align: center; padding: 22px 12px; color: var(--text-muted); font-size: 13px;";
-          emptyDiv.innerHTML = `当前目录下没有更深层的子文件夹<br><span style="font-size: 12px; color: var(--text-dim); margin-top: 4px; display: inline-block;">可直接点击上方【选中此处】保存，或右上角新建文件夹</span>`;
-          container.appendChild(emptyDiv);
-          return;
-        }
-
+        const folders = (json.list || []).filter(item => item.resType === 2 && item.fileName !== "保险箱");
         folders.forEach(f => {
-          const itemDiv = document.createElement("div");
-          const fPath = currentPathStr + "/" + f.fileName;
-          const isSelected = (cloudPickerSelectedId === f.fileId);
-          itemDiv.className = "cloud-picker-folder-item" + (isSelected ? " selected" : "");
-          itemDiv.dataset.id = f.fileId;
-          itemDiv.innerHTML = `
-            <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;" onclick="selectCloudPickerFolder('${f.fileId}', '${escapeHtml(fPath)}')">
-              <span style="font-size: 16px;">📁</span>
-              <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(f.fileName)}">${escapeHtml(f.fileName)}</span>
-            </div>
-            <div style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;">
-              <button class="btn-outline btn-sm" style="padding: 2px 8px; font-size: 11.5px;" onclick="event.stopPropagation(); selectCloudPickerFolder('${f.fileId}', '${escapeHtml(fPath)}')">选择</button>
-              <button class="btn-primary btn-sm" style="padding: 2px 8px; font-size: 11.5px;" onclick="event.stopPropagation(); loadCloudPickerFolder('${f.fileId}', '${escapeHtml(f.fileName)}')">进入 ➔</button>
-            </div>
-          `;
-          itemDiv.ondblclick = () => loadCloudPickerFolder(f.fileId, f.fileName);
-          container.appendChild(itemDiv);
+          cloudFolderParents[f.fileId] = { parentId: parentId, fileName: f.fileName };
         });
+        cloudTreeData[parentId] = folders;
+        return folders;
       } catch (e) {
-        container.innerHTML = `<div style="color: #f87171; padding: 20px; text-align: center;">读取网盘目录失败: ${e.message}</div>`;
+        console.error("Failed to load tree folder:", e);
+        cloudTreeData[parentId] = [];
+        return [];
       }
     }
 
-    function selectCloudPickerFolder(fileId, pathStr) {
-      cloudPickerSelectedId = fileId;
-      cloudPickerSelectedPath = pathStr;
-      document.getElementById("cloudPickerSelectedPathText").innerText = pathStr;
-      const items = document.querySelectorAll(".cloud-picker-folder-item");
-      items.forEach(el => {
-        if (el.dataset.id === fileId || (fileId === cloudPickerCurrentParentId && !el.dataset.id)) {
-          el.classList.add("selected");
-        } else {
-          el.classList.remove("selected");
-        }
-      });
+    async function openCloudFolderPickerModal() {
+      openModal("cloudFolderPickerModal");
+      const container = document.getElementById("cloudFolderTreeContainer");
+      container.innerHTML = `<div style="text-align:center; padding:35px; color:var(--text-muted); font-size:13px;">正在读取网盘目录...</div>`;
+
+      // Load root folders
+      await loadTreeFolderChildren("");
+
+      // Find default folder (来自：云添加)
+      const rootFolders = cloudTreeData[""] || [];
+      const cloudFolder = rootFolders.find(f => f.fileName && f.fileName.includes("云添加"));
+      if (cloudFolder) {
+        cloudDefaultTargetId = cloudFolder.fileId;
+        cloudDefaultTargetPath = "全部文件/" + cloudFolder.fileName;
+      }
+
+      // Initial selection
+      if (cloudAddTargetParentId) {
+        cloudTreeSelectedId = cloudAddTargetParentId;
+        cloudTreeSelectedPath = cloudAddTargetFolderPath || getCloudFolderPath(cloudAddTargetParentId);
+      } else if (cloudDefaultTargetId) {
+        cloudTreeSelectedId = cloudDefaultTargetId;
+        cloudTreeSelectedPath = cloudDefaultTargetPath;
+      } else {
+        cloudTreeSelectedId = "";
+        cloudTreeSelectedPath = "全部文件";
+      }
+
+      cloudTreeExpanded[""] = true;
+      updateTreeLocationDisplay();
+      renderCloudFolderTree();
     }
 
-    async function promptCreateCloudPickerFolder() {
-      const name = prompt("在当前网盘目录下新建文件夹名称：");
+    function updateTreeLocationDisplay() {
+      const pathEl = document.getElementById("cloudTreeCurrentPath");
+      const badgeEl = document.getElementById("cloudTreeDefaultBadge");
+      if (pathEl) pathEl.innerText = cloudTreeSelectedPath || "全部文件";
+      if (badgeEl) {
+        const isDefault = (cloudTreeSelectedId === cloudDefaultTargetId) || 
+                          (cloudTreeSelectedPath === cloudDefaultTargetPath) ||
+                          (cloudTreeSelectedPath.includes("云添加"));
+        badgeEl.style.display = isDefault ? "inline-block" : "none";
+      }
+    }
+
+    function restoreDefaultCloudFolderTree() {
+      if (cloudDefaultTargetId) {
+        cloudTreeSelectedId = cloudDefaultTargetId;
+        cloudTreeSelectedPath = cloudDefaultTargetPath;
+      } else {
+        cloudTreeSelectedId = "";
+        cloudTreeSelectedPath = "全部文件";
+      }
+      updateTreeLocationDisplay();
+      renderCloudFolderTree();
+    }
+
+    function renderCloudFolderTree() {
+      const container = document.getElementById("cloudFolderTreeContainer");
+      if (!container) return;
+
+      let html = "";
+
+      // 1. Root node: 全部文件
+      const rootExpanded = !!cloudTreeExpanded[""];
+      const rootSelected = (cloudTreeSelectedId === "");
+      html += `
+        <div class="cloud-tree-node ${rootSelected ? 'selected' : ''}" style="padding-left: 10px;" onclick="selectCloudTreeNode('', '全部文件', event)">
+          <div class="cloud-tree-arrow" onclick="event.stopPropagation(); toggleCloudTreeNode('', event)">
+            ${rootExpanded ? '▼' : '▶'}
+          </div>
+          <span class="cloud-tree-icon">📁</span>
+          <span class="cloud-tree-name">全部文件</span>
+          ${rootSelected ? '<span class="cloud-tree-check">✓</span>' : ''}
+        </div>
+      `;
+
+      // 2. Sub items
+      if (rootExpanded) {
+        html += renderTreeChildrenHtml("", 1);
+      }
+
+      container.innerHTML = html;
+    }
+
+    function renderTreeChildrenHtml(parentId, level) {
+      const children = cloudTreeData[parentId] || [];
+      if (children.length === 0) return "";
+
+      let html = "";
+      const indentPx = 10 + (level * 22);
+
+      children.forEach(f => {
+        const isExpanded = !!cloudTreeExpanded[f.fileId];
+        const isSelected = (cloudTreeSelectedId === f.fileId);
+        const hasLoadedChildren = cloudTreeData[f.fileId] !== undefined;
+        const subChildren = cloudTreeData[f.fileId] || [];
+        const showArrow = !hasLoadedChildren || subChildren.length > 0;
+
+        html += `
+          <div class="cloud-tree-node ${isSelected ? 'selected' : ''}" style="padding-left: ${indentPx}px;" onclick="selectCloudTreeNode('${f.fileId}', '${escapeHtml(f.fileName)}', event)">
+            <div class="cloud-tree-arrow" onclick="event.stopPropagation(); toggleCloudTreeNode('${f.fileId}', event)">
+              ${showArrow ? (isExpanded ? '▼' : '▶') : '<span style="display:inline-block;width:12px;"></span>'}
+            </div>
+            <span class="cloud-tree-icon">📁</span>
+            <span class="cloud-tree-name" title="${escapeHtml(f.fileName)}">${escapeHtml(f.fileName)}</span>
+            ${isSelected ? '<span class="cloud-tree-check">✓</span>' : ''}
+          </div>
+        `;
+
+        if (isExpanded && hasLoadedChildren && subChildren.length > 0) {
+          html += renderTreeChildrenHtml(f.fileId, level + 1);
+        }
+      });
+
+      return html;
+    }
+
+    async function toggleCloudTreeNode(folderId, event) {
+      if (event) event.stopPropagation();
+      const willExpand = !cloudTreeExpanded[folderId];
+      cloudTreeExpanded[folderId] = willExpand;
+
+      if (willExpand && cloudTreeData[folderId] === undefined) {
+        renderCloudFolderTree();
+        await loadTreeFolderChildren(folderId);
+      }
+      renderCloudFolderTree();
+    }
+
+    async function selectCloudTreeNode(folderId, folderName, event) {
+      cloudTreeSelectedId = folderId;
+      cloudTreeSelectedPath = getCloudFolderPath(folderId);
+      updateTreeLocationDisplay();
+
+      if (folderId && !cloudTreeExpanded[folderId]) {
+        cloudTreeExpanded[folderId] = true;
+        if (cloudTreeData[folderId] === undefined) {
+          renderCloudFolderTree();
+          await loadTreeFolderChildren(folderId);
+        }
+      }
+      renderCloudFolderTree();
+    }
+
+    async function promptCreateFolderInTree() {
+      const targetParentId = cloudTreeSelectedId || "";
+      const currentPath = cloudTreeSelectedPath || "全部文件";
+      const name = prompt(`在 “${currentPath}” 目录下新建文件夹：`);
       if (!name || !name.trim()) return;
+
       try {
         const res = await fetch("/api/create-folder", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: name.trim(), parentId: cloudPickerCurrentParentId })
+          body: JSON.stringify({ name: name.trim(), parentId: targetParentId })
         });
         const d = await res.json();
         if (d.msg === "success" || d.code === 0) {
           showToast("新建文件夹成功");
-          loadCloudPickerFolder(cloudPickerCurrentParentId);
+          delete cloudTreeData[targetParentId];
+          cloudTreeExpanded[targetParentId] = true;
+          await loadTreeFolderChildren(targetParentId);
+          const children = cloudTreeData[targetParentId] || [];
+          const newFolder = children.find(c => c.fileName === name.trim());
+          if (newFolder) {
+            cloudTreeSelectedId = newFolder.fileId;
+            cloudTreeSelectedPath = getCloudFolderPath(newFolder.fileId);
+          }
+          updateTreeLocationDisplay();
+          renderCloudFolderTree();
         } else {
           alert("新建失败: " + (d.msg || JSON.stringify(d)));
         }
@@ -3046,9 +3369,9 @@ HTML_PAGE = """<!DOCTYPE html>
       }
     }
 
-    function confirmCloudFolderPicker() {
-      cloudAddTargetParentId = cloudPickerSelectedId;
-      cloudAddTargetFolderPath = cloudPickerSelectedPath || "全部文件";
+    function confirmCloudFolderTreeSelection() {
+      cloudAddTargetParentId = cloudTreeSelectedId;
+      cloudAddTargetFolderPath = cloudTreeSelectedPath || "全部文件";
       document.getElementById("cloudAddTargetFolderDisplay").innerText = cloudAddTargetFolderPath;
       closeModal("cloudFolderPickerModal");
     }
@@ -3806,6 +4129,27 @@ class RequestHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send_json({"error": str(e), "folders": []}, 500)
 
+        elif path == "/api/fs/check-file":
+            target_dir = query.get("targetDir", [""])[0].strip() or self.app.download_dir
+            file_name = query.get("fileName", [""])[0].strip()
+            full_path = os.path.join(target_dir, file_name)
+            exists = os.path.exists(full_path)
+            suggested_name = file_name
+            if exists:
+                base, ext = os.path.splitext(file_name)
+                counter = 1
+                while True:
+                    candidate = f"{base} ({counter}){ext}"
+                    if not os.path.exists(os.path.join(target_dir, candidate)):
+                        suggested_name = candidate
+                        break
+                    counter += 1
+            self._send_json({
+                "exists": exists,
+                "path": full_path,
+                "suggestedName": suggested_name
+            })
+
         else:
             self.send_response(404)
             self.end_headers()
@@ -4079,6 +4423,24 @@ class RequestHandler(BaseHTTPRequestHandler):
             delete_file = body.get("deleteFile", False)
             try:
                 res = self.app.client.delete_cloud_task(task_id, delete_file=delete_file)
+                self._send_json(res)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+
+        elif path == "/api/cloud-add/retry":
+            body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            task_id = body.get("taskId")
+            try:
+                res = self.app.client.retry_cloud_task(task_id)
+                self._send_json(res)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+
+        elif path == "/api/cloud-add/pause":
+            body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            task_id = body.get("taskId")
+            try:
+                res = self.app.client.pause_cloud_task(task_id)
                 self._send_json(res)
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)

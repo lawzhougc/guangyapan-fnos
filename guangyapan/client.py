@@ -395,7 +395,29 @@ class GuangyapanClient:
         return res.get("data", {})
 
     def delete_cloud_task(self, task_id: str, delete_file: bool = False) -> Dict[str, Any]:
-        return self._post("/cloudcollection/v2/delete_task", {"taskId": task_id, "deleteFile": delete_file})
+        """
+        Delete cloud offline download task with support for deleting cloud file.
+        """
+        return self._post("/cloudcollection/v2/delete_task", {
+            "taskIds": [task_id],
+            "deleteFile": bool(delete_file)
+        })
+
+    def retry_cloud_task(self, task_id: str) -> Dict[str, Any]:
+        """
+        Retry / resume a cloud offline download task.
+        """
+        return self._post("/cloudcollection/v2/retry_task", {
+            "taskIds": [task_id]
+        })
+
+    def pause_cloud_task(self, task_id: str) -> Dict[str, Any]:
+        """
+        Attempt to pause a cloud offline download task.
+        """
+        return self._post("/cloudcollection/v2/pause_task", {
+            "taskIds": [task_id]
+        })
 
     # ================= Upload (Instant & Object Storage) =================
     def upload_file(self, file_path: str, parent_id: str = "", custom_name: Optional[str] = None, progress_callback=None) -> Dict[str, Any]:

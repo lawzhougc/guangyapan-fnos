@@ -97,6 +97,8 @@ class FileDownloader:
             "aria2c",
             "--summary-interval=1",
             "--continue=true",
+            "--allow-overwrite=true",
+            "--auto-file-renaming=false",
             "--max-connection-per-server=16",
             "--split=16",
             "--min-split-size=1M",
