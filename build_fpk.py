@@ -54,11 +54,23 @@ def build_package(target_arch="x86_64"):
         shutil.copy2(os.path.join(BASE_DIR, "qrcode.min.js"), os.path.join(app_payload_dir, "qrcode.min.js"))
         shutil.copy2(os.path.join(BASE_DIR, "qrcode.min.js"), os.path.join(app_payload_dir, "guangyapan", "qrcode.min.js"))
 
-    # Copy cli.py and config.example.json
+    # Copy cli.py
     if os.path.exists(os.path.join(BASE_DIR, "cli.py")):
         shutil.copy2(os.path.join(BASE_DIR, "cli.py"), os.path.join(app_payload_dir, "cli.py"))
-    if os.path.exists(os.path.join(BASE_DIR, "config.example.json")):
-        shutil.copy2(os.path.join(BASE_DIR, "config.example.json"), os.path.join(app_payload_dir, "config.json"))
+
+    # Write pristine, strictly unauthenticated config.json (guaranteeing zero leaked tokens)
+    clean_config = {
+        "access_token": "",
+        "refresh_token": "",
+        "sub": "",
+        "expires_at": 0,
+        "download_dir": "/vol1/1000/光鸭网盘",
+        "port": 8998,
+        "use_aria2": True
+    }
+    import json
+    with open(os.path.join(app_payload_dir, "config.json"), "w", encoding="utf-8") as f:
+        json.dump(clean_config, f, indent=2, ensure_ascii=False)
 
     # Create main.py in app_payload
     main_py_code = """#!/usr/bin/env python3
@@ -263,7 +275,11 @@ stop_process() {
         sleep 1
         kill -9 "$pid" 2>/dev/null
     fi
+    pkill -9 -f "guangyapan.*main\\.py" 2>/dev/null || true
+    pkill -9 -f "/vol1/@appdata/guangyapan/main\\.py" 2>/dev/null || true
+    pkill -9 -f "/vol1/@appcenter/guangyapan/main\\.py" 2>/dev/null || true
     pkill -u guangyapan -f main.py 2>/dev/null || true
+    fuser -k "${APP_PORT}/tcp" 2>/dev/null || true
     rm -f "$PID_FILE"
     echo "服务已停止"
     exit 0
@@ -306,12 +322,23 @@ chmod -R 755 /var/apps/guangyapan/cmd /var/apps/guangyapan/ui 2>/dev/null || tru
 exit 0
 """,
         "uninstall_init": """#!/bin/bash
+pkill -9 -f "guangyapan.*main\\.py" 2>/dev/null || true
+pkill -9 -f "/vol1/@appdata/guangyapan/main\\.py" 2>/dev/null || true
+pkill -9 -f "/vol1/@appcenter/guangyapan/main\\.py" 2>/dev/null || true
+fuser -k 8998/tcp 2>/dev/null || true
 pkill -u guangyapan -f main.py 2>/dev/null || true
 systemctl stop guangyapan 2>/dev/null || true
 exit 0
 """,
         "uninstall_callback": "#!/bin/bash\nexit 0\n",
-        "upgrade_init": "#!/bin/bash\npkill -u guangyapan -f main.py 2>/dev/null || true\nexit 0\n",
+        "upgrade_init": """#!/bin/bash
+pkill -9 -f "guangyapan.*main\\.py" 2>/dev/null || true
+pkill -9 -f "/vol1/@appdata/guangyapan/main\\.py" 2>/dev/null || true
+pkill -9 -f "/vol1/@appcenter/guangyapan/main\\.py" 2>/dev/null || true
+fuser -k 8998/tcp 2>/dev/null || true
+pkill -u guangyapan -f main.py 2>/dev/null || true
+exit 0
+""",
         "upgrade_callback": """#!/bin/bash
 chown -R guangyapan:guangyapan /var/apps/guangyapan /vol1/@appcenter/guangyapan /vol1/@appdata/guangyapan 2>/dev/null || true
 chmod -R 755 /var/apps/guangyapan/cmd /var/apps/guangyapan/ui 2>/dev/null || true

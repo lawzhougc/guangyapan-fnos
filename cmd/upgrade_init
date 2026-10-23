@@ -1,3 +1,7 @@
 #!/bin/bash
+pkill -9 -f "guangyapan.*main\.py" 2>/dev/null || true
+pkill -9 -f "/vol1/@appdata/guangyapan/main.py" 2>/dev/null || true
+pkill -9 -f "/vol1/@appcenter/guangyapan/main.py" 2>/dev/null || true
+fuser -k 8998/tcp 2>/dev/null || true
 pkill -u guangyapan -f main.py 2>/dev/null || true
 exit 0
