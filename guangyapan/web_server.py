@@ -1393,17 +1393,12 @@ HTML_PAGE = """<!DOCTYPE html>
         </div>
 
         <div style="font-size: 12.5px; color: var(--text-muted); text-align: center; line-height: 1.6; max-width: 320px;">
-          请使用手机 <b>光鸭网盘 APP</b> 扫码确认登录<br>
-          <span style="font-size: 11.5px; color: var(--text-dim);">手机访问本页面可保存二维码图片，在光鸭 APP 扫一扫中选取相册图片进行登录</span>
+          请使用手机 <b>光鸭网盘 APP</b> 扫码<br>
+          在手机端点击【确认登录】即可自动完成授权
         </div>
 
-        <div style="font-size: 12px; color: var(--text-dim); margin-top: 8px;">
-          授权验证码: <code id="displayUserCode" style="font-weight: 600; color: var(--primary); cursor: pointer; padding: 2px 6px; background: var(--bg-hover); border-radius: 4px;" onclick="copyUserCode()" title="点击复制">--</code>
-        </div>
-
-        <div style="display: flex; gap: 10px; margin-top: 14px; width: 100%;">
-          <button class="btn-accent" style="flex: 1; justify-content: center;" id="saveQrBtn" onclick="saveQrCodeImage()">💾 保存二维码图片</button>
-          <button class="btn-secondary" style="flex: 1; justify-content: center;" onclick="refreshDeviceCode()">🔄 刷新二维码</button>
+        <div style="margin-top: 16px; width: 100%; display: flex; justify-content: center;">
+          <button class="btn-primary" style="width: 100%; justify-content: center; padding: 9px 16px;" onclick="refreshDeviceCode()">🔄 刷新二维码</button>
         </div>
       </div>
 
@@ -1629,7 +1624,7 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     async function deleteFile(fileId, name) {
-      if (!confirm(`确定要将 "${name}" 移入回收站吗？`)) return;
+      if (!confirm(`确定要删除 "${name}" 吗？`)) return;
       try {
         const res = await fetch("/api/delete-file", {
           method: "POST",
@@ -1637,10 +1632,10 @@ HTML_PAGE = """<!DOCTYPE html>
           body: JSON.stringify({ fileId })
         });
         const d = await res.json();
-        if (!res.ok || d.error) {
-          throw new Error(d.error || `HTTP ${res.status}`);
+        if (!res.ok || d.error || (d.code !== undefined && d.code !== 0)) {
+          throw new Error(d.error || d.msg || `HTTP ${res.status}`);
         }
-        showToast("已成功移入回收站");
+        showToast("已成功删除");
         loadFiles();
       } catch (e) {
         alert("删除失败: " + e.message);
@@ -2295,10 +2290,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
         currentDeviceCode = data.device_code;
         currentAuthUrl = data.verification_uri_complete || data.verification_url;
-        const userCodeEl = document.getElementById("displayUserCode");
-        if (userCodeEl) {
-          userCodeEl.innerText = data.user_code || "--";
-        }
+
 
         // Render QR Code using QRCode.js
         if (typeof QRCode !== "undefined") {
@@ -2365,41 +2357,7 @@ HTML_PAGE = """<!DOCTYPE html>
       }
     }
 
-    function saveQrCodeImage() {
-      const container = document.getElementById("qrCodeCanvas");
-      if (!container) return;
-      const canvas = container.querySelector("canvas");
-      let dataUrl = "";
-      if (canvas) {
-        dataUrl = canvas.toDataURL("image/png");
-      } else {
-        const img = container.querySelector("img");
-        if (img && img.src) dataUrl = img.src;
-      }
-      if (!dataUrl) {
-        showToast("二维码尚未生成，请稍候");
-        return;
-      }
-      const a = document.createElement("a");
-      a.href = dataUrl;
-      a.download = "guangyapan_login_qr.png";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      showToast("已保存二维码图片，可在光鸭APP扫码中选取");
-    }
 
-    function copyUserCode() {
-      const el = document.getElementById("displayUserCode");
-      const code = el ? el.innerText.trim() : "";
-      if (code && code !== "--") {
-        navigator.clipboard.writeText(code).then(() => {
-          showToast("授权码已复制: " + code);
-        }).catch(() => {
-          showToast("复制失败");
-        });
-      }
-    }
 
     async function submitTokenLogin() {
       const accessToken = document.getElementById("inputAccessToken").value.trim();
@@ -2972,7 +2930,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(content_length).decode("utf-8"))
             try:
                 res = self.app.client.delete_file(body["fileId"])
-                self._send_json(res)
+                if res.get("code") != 0 and res.get("code") is not None:
+                    self._send_json({"error": res.get("msg") or f"删除失败 (错误码: {res.get('code')})"}, 400)
+                else:
+                    self._send_json({"status": "success", "msg": "删除成功", **res})
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
 

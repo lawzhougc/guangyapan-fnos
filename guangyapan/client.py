@@ -270,24 +270,36 @@ class GuangyapanClient:
 
     def delete_file(self, file_id: str) -> Dict[str, Any]:
         """
-        Delete file / move to recycle bin.
-        Tries /userres/v1/file/recycle_file first (standard netdisk deletion) then permanent delete_file.
-        Supports both single fileId and fileIds array formats for maximum compatibility.
+        Delete file(s) or folder(s).
+        Guangyapan official endpoint: /userres/v1/file/delete_file with body {"fileIds": [file_id]}.
+        Returns an asynchronous task (taskId). We poll /userres/v1/get_task_status until completed.
         """
-        last_err = None
-        for endpoint in ["/userres/v1/file/recycle_file", "/userres/v1/file/delete_file"]:
-            for payload in [
-                {"fileId": file_id, "fileIds": [file_id]},
-                {"fileId": file_id},
-                {"fileIds": [file_id]}
-            ]:
+        file_ids = [file_id] if isinstance(file_id, str) else list(file_id)
+        res = self._post("/userres/v1/file/delete_file", {"fileIds": file_ids})
+        if res.get("code") != 0 and res.get("code") is not None:
+            raise RuntimeError(res.get("msg") or f"删除失败 (错误码: {res.get('code')})")
+
+        task_id = (res.get("data") or {}).get("taskId")
+        if task_id:
+            import time
+            for _ in range(16):
+                time.sleep(0.5)
                 try:
-                    return self._post(endpoint, payload)
+                    st_res = self._post("/userres/v1/get_task_status", {"taskId": task_id})
+                    st_data = st_res.get("data") or {}
+                    status = st_data.get("status")
+                    if status == 2:
+                        break
+                    elif status == 3:
+                        detail = st_data.get("detail") or {}
+                        raise RuntimeError(detail.get("msg") or "删除任务执行失败")
+                except RuntimeError:
+                    raise
                 except Exception as e:
-                    last_err = e
-        if last_err:
-            raise last_err
-        return {}
+                    print("Error polling delete task status:", e)
+                    break
+
+        return res
 
     def rename_file(self, file_id: str, new_name: str) -> Dict[str, Any]:
         return self._post("/userres/v1/file/rename", {"fileId": file_id, "name": new_name})
