@@ -3,50 +3,65 @@ import tarfile
 import io
 import shutil
 import hashlib
+import sys
+import argparse
 
 BASE_DIR = r"d:\antigravity\guangyapan_fnos"
-BUILD_DIR = os.path.join(BASE_DIR, "build_fpk_tmp")
-OUTPUT_FPK = os.path.join(BASE_DIR, "guangyapan-1.0.3-x86_64.fpk")
 
-if os.path.exists(BUILD_DIR):
-    shutil.rmtree(BUILD_DIR)
-os.makedirs(BUILD_DIR, exist_ok=True)
+def build_package(target_arch="x86_64"):
+    is_arm = target_arch.lower() in ("arm", "arm64", "aarch64")
+    arch_tag = "arm64" if is_arm else "x86_64"
+    platform_val = "arm" if is_arm else "x86"
+    arch_val = "arm64 aarch64" if is_arm else "x86_64"
 
-# 1. Prepare files for app.tgz (the installed payload)
-app_payload_dir = os.path.join(BUILD_DIR, "app_payload")
-os.makedirs(os.path.join(app_payload_dir, "ui", "images"), exist_ok=True)
-os.makedirs(os.path.join(app_payload_dir, "guangyapan"), exist_ok=True)
+    build_dir = os.path.join(BASE_DIR, f"build_fpk_tmp_{arch_tag}")
+    output_fpk = os.path.join(BASE_DIR, f"guangyapan-1.0.3-{arch_tag}.fpk")
 
-# Copy python sources
-for py_file in ["client.py", "downloader.py", "hash_utils.py", "web_server.py", "__init__.py"]:
-    src = os.path.join(BASE_DIR, "guangyapan", py_file)
-    dst = os.path.join(app_payload_dir, "guangyapan", py_file)
-    shutil.copy2(src, dst)
+    if os.path.exists(build_dir):
+        shutil.rmtree(build_dir)
+    os.makedirs(build_dir, exist_ok=True)
 
-# Copy official icon and favicon to payload
-official_icon = os.path.join(BASE_DIR, "icon.png")
-if not os.path.exists(official_icon):
-    official_icon = os.path.join(BASE_DIR, "icon-256.png")
+    print(f"\n==========================================")
+    print(f"Building Guangyapan FPK for [{arch_tag.upper()}] ...")
+    print(f"Platform: {platform_val}, Arch: {arch_val}")
+    print(f"Output: {output_fpk}")
+    print(f"==========================================")
 
-shutil.copy2(official_icon, os.path.join(app_payload_dir, "icon.png"))
-shutil.copy2(official_icon, os.path.join(app_payload_dir, "guangyapan", "icon.png"))
+    # 1. Prepare files for app.tgz (the installed payload)
+    app_payload_dir = os.path.join(build_dir, "app_payload")
+    os.makedirs(os.path.join(app_payload_dir, "ui", "images"), exist_ok=True)
+    os.makedirs(os.path.join(app_payload_dir, "guangyapan"), exist_ok=True)
 
-if os.path.exists(os.path.join(BASE_DIR, "favicon.ico")):
-    shutil.copy2(os.path.join(BASE_DIR, "favicon.ico"), os.path.join(app_payload_dir, "favicon.ico"))
+    # Copy python sources
+    for py_file in ["client.py", "downloader.py", "hash_utils.py", "web_server.py", "__init__.py"]:
+        src = os.path.join(BASE_DIR, "guangyapan", py_file)
+        dst = os.path.join(app_payload_dir, "guangyapan", py_file)
+        shutil.copy2(src, dst)
 
-# Copy qrcode.min.js to payload
-if os.path.exists(os.path.join(BASE_DIR, "qrcode.min.js")):
-    shutil.copy2(os.path.join(BASE_DIR, "qrcode.min.js"), os.path.join(app_payload_dir, "qrcode.min.js"))
-    shutil.copy2(os.path.join(BASE_DIR, "qrcode.min.js"), os.path.join(app_payload_dir, "guangyapan", "qrcode.min.js"))
+    # Copy official icon and favicon to payload
+    official_icon = os.path.join(BASE_DIR, "icon.png")
+    if not os.path.exists(official_icon):
+        official_icon = os.path.join(BASE_DIR, "guangyapan_real_icon_256.png")
 
-# Copy cli.py and config.json
-if os.path.exists(os.path.join(BASE_DIR, "cli.py")):
-    shutil.copy2(os.path.join(BASE_DIR, "cli.py"), os.path.join(app_payload_dir, "cli.py"))
-if os.path.exists(os.path.join(BASE_DIR, "config.json")):
-    shutil.copy2(os.path.join(BASE_DIR, "config.json"), os.path.join(app_payload_dir, "config.json"))
+    shutil.copy2(official_icon, os.path.join(app_payload_dir, "icon.png"))
+    shutil.copy2(official_icon, os.path.join(app_payload_dir, "guangyapan", "icon.png"))
 
-# Create main.py in app_payload
-main_py_code = """#!/usr/bin/env python3
+    if os.path.exists(os.path.join(BASE_DIR, "favicon.ico")):
+        shutil.copy2(os.path.join(BASE_DIR, "favicon.ico"), os.path.join(app_payload_dir, "favicon.ico"))
+
+    # Copy qrcode.min.js to payload
+    if os.path.exists(os.path.join(BASE_DIR, "qrcode.min.js")):
+        shutil.copy2(os.path.join(BASE_DIR, "qrcode.min.js"), os.path.join(app_payload_dir, "qrcode.min.js"))
+        shutil.copy2(os.path.join(BASE_DIR, "qrcode.min.js"), os.path.join(app_payload_dir, "guangyapan", "qrcode.min.js"))
+
+    # Copy cli.py and config.example.json
+    if os.path.exists(os.path.join(BASE_DIR, "cli.py")):
+        shutil.copy2(os.path.join(BASE_DIR, "cli.py"), os.path.join(app_payload_dir, "cli.py"))
+    if os.path.exists(os.path.join(BASE_DIR, "config.example.json")):
+        shutil.copy2(os.path.join(BASE_DIR, "config.example.json"), os.path.join(app_payload_dir, "config.json"))
+
+    # Create main.py in app_payload
+    main_py_code = """#!/usr/bin/env python3
 import sys
 import os
 import signal
@@ -70,31 +85,31 @@ if __name__ == "__main__":
             config_path = alt
     run_server(port=port, config_path=config_path)
 """
-with open(os.path.join(app_payload_dir, "main.py"), "w", encoding="utf-8", newline="\n") as f:
-    f.write(main_py_code)
+    with open(os.path.join(app_payload_dir, "main.py"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(main_py_code)
 
-# Copy UI images (all sizes from official icon)
-for size in [16, 32, 64, 128, 256, 512]:
-    src = os.path.join(BASE_DIR, f"icon-{size}.png")
-    if not os.path.exists(src):
-        src = official_icon
-    dst_num = os.path.join(app_payload_dir, "ui", "images", f"{size}.png")
-    dst_icon = os.path.join(app_payload_dir, "ui", "images", f"icon_{size}.png")
-    dst_hyphen = os.path.join(app_payload_dir, "ui", "images", f"icon-{size}.png")
-    shutil.copy2(src, dst_num)
-    shutil.copy2(src, dst_icon)
-    shutil.copy2(src, dst_hyphen)
+    # Copy UI images (all sizes from official icon)
+    for size in [16, 32, 48, 64, 128, 256, 512]:
+        src = os.path.join(BASE_DIR, f"icon-{size}.png")
+        if not os.path.exists(src):
+            src = official_icon
+        dst_num = os.path.join(app_payload_dir, "ui", "images", f"{size}.png")
+        dst_icon = os.path.join(app_payload_dir, "ui", "images", f"icon_{size}.png")
+        dst_hyphen = os.path.join(app_payload_dir, "ui", "images", f"icon-{size}.png")
+        shutil.copy2(src, dst_num)
+        shutil.copy2(src, dst_icon)
+        shutil.copy2(src, dst_hyphen)
 
-# Special icon_{0}.png and {0}.png
-shutil.copy2(official_icon, os.path.join(app_payload_dir, "ui", "images", "icon_{0}.png"))
-shutil.copy2(official_icon, os.path.join(app_payload_dir, "ui", "images", "{0}.png"))
-shutil.copy2(official_icon, os.path.join(app_payload_dir, "ui", "images", "icon-{0}.png"))
-shutil.copy2(official_icon, os.path.join(app_payload_dir, "ui", "images", "0.png"))
-shutil.copy2(official_icon, os.path.join(app_payload_dir, "ui", "images", "icon_0.png"))
-shutil.copy2(official_icon, os.path.join(app_payload_dir, "ui", "images", "icon.png"))
+    # Special icon_{0}.png and {0}.png
+    shutil.copy2(official_icon, os.path.join(app_payload_dir, "ui", "images", "icon_{0}.png"))
+    shutil.copy2(official_icon, os.path.join(app_payload_dir, "ui", "images", "{0}.png"))
+    shutil.copy2(official_icon, os.path.join(app_payload_dir, "ui", "images", "icon-{0}.png"))
+    shutil.copy2(official_icon, os.path.join(app_payload_dir, "ui", "images", "0.png"))
+    shutil.copy2(official_icon, os.path.join(app_payload_dir, "ui", "images", "icon_0.png"))
+    shutil.copy2(official_icon, os.path.join(app_payload_dir, "ui", "images", "icon.png"))
 
-# UI Config
-ui_config = """{
+    # UI Config
+    ui_config = """{
     ".url": {
         "guangyapan.Application": {
             "title": "光鸭网盘",
@@ -109,40 +124,41 @@ ui_config = """{
     }
 }
 """
-with open(os.path.join(app_payload_dir, "ui", "config"), "w", encoding="utf-8", newline="\n") as f:
-    f.write(ui_config)
+    with open(os.path.join(app_payload_dir, "ui", "config"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(ui_config)
 
-# Pack app.tgz
-app_tgz_path = os.path.join(BUILD_DIR, "app.tgz")
-with tarfile.open(app_tgz_path, "w:gz") as tar:
-    for root, dirs, files in os.walk(app_payload_dir):
-        for f in files:
-            full_path = os.path.join(root, f)
-            rel_path = os.path.relpath(full_path, app_payload_dir).replace("\\", "/")
-            ti = tar.gettarinfo(full_path, arcname=rel_path)
-            ti.uid = 0
-            ti.gid = 0
-            ti.uname = "root"
-            ti.gname = "root"
-            if f.endswith(".py") or f.endswith(".sh") or f == "main.py":
-                ti.mode = 0o755
-            else:
-                ti.mode = 0o644
-            with open(full_path, "rb") as fp:
-                tar.addfile(ti, fp)
+    # Pack app.tgz
+    app_tgz_path = os.path.join(build_dir, "app.tgz")
+    with tarfile.open(app_tgz_path, "w:gz") as tar:
+        for root, dirs, files in os.walk(app_payload_dir):
+            for f in files:
+                full_path = os.path.join(root, f)
+                rel_path = os.path.relpath(full_path, app_payload_dir).replace("\\", "/")
+                ti = tar.gettarinfo(full_path, arcname=rel_path)
+                ti.uid = 0
+                ti.gid = 0
+                ti.uname = "root"
+                ti.gname = "root"
+                if f.endswith(".py") or f.endswith(".sh") or f == "main.py":
+                    ti.mode = 0o755
+                else:
+                    ti.mode = 0o644
+                with open(full_path, "rb") as fp:
+                    tar.addfile(ti, fp)
 
-print("Packed app.tgz successfully, size:", os.path.getsize(app_tgz_path))
+    print("Packed app.tgz successfully, size:", os.path.getsize(app_tgz_path))
 
-# 2. Prepare outer package files
-pkg_root = os.path.join(BUILD_DIR, "pkg_root")
-os.makedirs(os.path.join(pkg_root, "config"), exist_ok=True)
-os.makedirs(os.path.join(pkg_root, "cmd"), exist_ok=True)
+    # 2. Prepare outer package files
+    pkg_root = os.path.join(build_dir, "pkg_root")
+    os.makedirs(os.path.join(pkg_root, "config"), exist_ok=True)
+    os.makedirs(os.path.join(pkg_root, "cmd"), exist_ok=True)
 
-# Manifest
-manifest_content = """appname="guangyapan"
+    # Manifest
+    manifest_content = f"""appname="guangyapan"
 version="1.0.3"
 desc="光鸭网盘 fnOS 专用版，支持高速上传下载、磁链/BT云离线、NAS本地存储管理"
-arch="x86_64"
+arch="{arch_val}"
+platform="{platform_val}"
 maintainer="guangyapan"
 maintainer_url="https://guangyapan.com"
 distributor="fnOS"
@@ -157,29 +173,28 @@ install_type="volume"
 checkport="false"
 micro_app="false"
 disable_authorization_path="false"
-changelog="1.0.3: 适配光鸭云盘官方视觉与官方应用图标；新增官方扫码登录、Token导入与登出；修复移动端不可用与桌面图标显示，全面优化应用中心状态管理"
+changelog="1.0.3: [{arch_tag.upper()} 架构] 适配光鸭官方视觉与橙底鸭子图标；完整支持官方扫码登录与Token导入；优化NAS本地存储目录选择与全状态运行管理"
 """
-with open(os.path.join(pkg_root, "manifest"), "w", encoding="utf-8", newline="\n") as f:
-    f.write(manifest_content)
+    with open(os.path.join(pkg_root, "manifest"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(manifest_content)
 
-# config/privilege
-privilege_content = """{
+    # config/privilege
+    privilege_content = """{
     "defaults": {
         "run-as": "package"
     }
 }
 """
-with open(os.path.join(pkg_root, "config", "privilege"), "w", encoding="utf-8", newline="\n") as f:
-    f.write(privilege_content)
+    with open(os.path.join(pkg_root, "config", "privilege"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(privilege_content)
 
-# config/resource
-resource_content = """{}
-"""
-with open(os.path.join(pkg_root, "config", "resource"), "w", encoding="utf-8", newline="\n") as f:
-    f.write(resource_content)
+    # config/resource
+    resource_content = "{}\n"
+    with open(os.path.join(pkg_root, "config", "resource"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(resource_content)
 
-# cmd/main
-cmd_main = """#!/bin/bash
+    # cmd/main
+    cmd_main = """#!/bin/bash
 
 APP_PORT=8998
 DATA_DIR="/vol1/@appdata/guangyapan"
@@ -214,7 +229,6 @@ start_process() {
 
     mkdir -p "$DATA_DIR"
     
-    # Prefer launching from TARGET_DIR or DATA_DIR
     local run_script="${TARGET_DIR}/main.py"
     if [ ! -f "$run_script" ]; then
         run_script="${DATA_DIR}/main.py"
@@ -276,14 +290,13 @@ case "$1" in
         ;;
 esac
 """
-with open(os.path.join(pkg_root, "cmd", "main"), "w", encoding="utf-8", newline="\n") as f:
-    f.write(cmd_main)
+    with open(os.path.join(pkg_root, "cmd", "main"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(cmd_main)
 
-# Callbacks
-callbacks = {
-    "install_init": "#!/bin/bash\nexit 0\n",
-    "install_callback": """#!/bin/bash
-# Ensure package user & group exist
+    # Callbacks
+    callbacks = {
+        "install_init": "#!/bin/bash\nexit 0\n",
+        "install_callback": """#!/bin/bash
 if ! id guangyapan >/dev/null 2>&1; then
     groupadd guangyapan 2>/dev/null || true
     useradd -g 901 -G guangyapan -s /usr/sbin/nologin -d /home/guangyapan -M guangyapan 2>/dev/null || true
@@ -292,80 +305,93 @@ chown -R guangyapan:guangyapan /var/apps/guangyapan /vol1/@appcenter/guangyapan 
 chmod -R 755 /var/apps/guangyapan/cmd /var/apps/guangyapan/ui 2>/dev/null || true
 exit 0
 """,
-    "uninstall_init": """#!/bin/bash
+        "uninstall_init": """#!/bin/bash
 pkill -u guangyapan -f main.py 2>/dev/null || true
 systemctl stop guangyapan 2>/dev/null || true
 exit 0
 """,
-    "uninstall_callback": "#!/bin/bash\nexit 0\n",
-    "upgrade_init": "#!/bin/bash\npkill -u guangyapan -f main.py 2>/dev/null || true\nexit 0\n",
-    "upgrade_callback": """#!/bin/bash
+        "uninstall_callback": "#!/bin/bash\nexit 0\n",
+        "upgrade_init": "#!/bin/bash\npkill -u guangyapan -f main.py 2>/dev/null || true\nexit 0\n",
+        "upgrade_callback": """#!/bin/bash
 chown -R guangyapan:guangyapan /var/apps/guangyapan /vol1/@appcenter/guangyapan /vol1/@appdata/guangyapan 2>/dev/null || true
 chmod -R 755 /var/apps/guangyapan/cmd /var/apps/guangyapan/ui 2>/dev/null || true
 exit 0
 """,
-    "config_init": "#!/bin/bash\nexit 0\n",
-    "config_callback": "#!/bin/bash\nexit 0\n"
-}
+        "config_init": "#!/bin/bash\nexit 0\n",
+        "config_callback": "#!/bin/bash\nexit 0\n"
+    }
 
-for name, content in callbacks.items():
-    with open(os.path.join(pkg_root, "cmd", name), "w", encoding="utf-8", newline="\n") as f:
-        f.write(content)
+    for name, content in callbacks.items():
+        with open(os.path.join(pkg_root, "cmd", name), "w", encoding="utf-8", newline="\n") as f:
+            f.write(content)
 
-# Copy app.tgz into outer pkg_root
-shutil.copy2(app_tgz_path, os.path.join(pkg_root, "app.tgz"))
+    # Copy app.tgz into outer pkg_root
+    shutil.copy2(app_tgz_path, os.path.join(pkg_root, "app.tgz"))
 
-# Read official icon bytes
-with open(official_icon, "rb") as f:
-    official_icon_bytes = f.read()
+    with open(official_icon, "rb") as f:
+        official_icon_bytes = f.read()
 
-# 3. Create the final .fpk archive using python tarfile
-# An fpk is a gzip-compressed tar archive containing manifest, config/, cmd/, ICON.PNG, ICON_256.PNG, app.tgz
-print(f"Creating FPK package: {OUTPUT_FPK} ...")
-with tarfile.open(OUTPUT_FPK, "w:gz") as fpk:
-    # Add files from pkg_root
-    for root, dirs, files in os.walk(pkg_root):
-        for d in dirs:
-            full_d = os.path.join(root, d)
-            rel_d = os.path.relpath(full_d, pkg_root).replace("\\", "/") + "/"
-            ti = fpk.gettarinfo(full_d, arcname=rel_d)
-            ti.uid = 0
-            ti.gid = 0
-            ti.uname = "root"
-            ti.gname = "root"
-            ti.mode = 0o755
-            fpk.addfile(ti)
-        for f in files:
-            full_path = os.path.join(root, f)
-            rel_path = os.path.relpath(full_path, pkg_root).replace("\\", "/")
-            ti = fpk.gettarinfo(full_path, arcname=rel_path)
-            ti.uid = 0
-            ti.gid = 0
-            ti.uname = "root"
-            ti.gname = "root"
-            if rel_path.startswith("cmd/"):
+    # 3. Create the final .fpk archive using python tarfile
+    print(f"Creating FPK package: {output_fpk} ...")
+    with tarfile.open(output_fpk, "w:gz") as fpk:
+        for root, dirs, files in os.walk(pkg_root):
+            for d in dirs:
+                full_d = os.path.join(root, d)
+                rel_d = os.path.relpath(full_d, pkg_root).replace("\\", "/") + "/"
+                ti = fpk.gettarinfo(full_d, arcname=rel_d)
+                ti.uid = 0
+                ti.gid = 0
+                ti.uname = "root"
+                ti.gname = "root"
                 ti.mode = 0o755
-            else:
-                ti.mode = 0o644
-            with open(full_path, "rb") as fp:
-                fpk.addfile(ti, fp)
-    
-    # Add ICON.PNG, ICON_256.PNG, and icon.png explicitly with exact case
-    for icon_name in ["ICON.PNG", "ICON_256.PNG", "icon.png"]:
-        ti = tarfile.TarInfo(name=icon_name)
-        ti.size = len(official_icon_bytes)
-        ti.mode = 0o644
-        ti.uid = 0
-        ti.gid = 0
-        ti.uname = "root"
-        ti.gname = "root"
-        ti.type = tarfile.REGTYPE
-        fpk.addfile(ti, io.BytesIO(official_icon_bytes))
+                fpk.addfile(ti)
+            for f in files:
+                full_path = os.path.join(root, f)
+                rel_path = os.path.relpath(full_path, pkg_root).replace("\\", "/")
+                ti = fpk.gettarinfo(full_path, arcname=rel_path)
+                ti.uid = 0
+                ti.gid = 0
+                ti.uname = "root"
+                ti.gname = "root"
+                if rel_path.startswith("cmd/"):
+                    ti.mode = 0o755
+                else:
+                    ti.mode = 0o644
+                with open(full_path, "rb") as fp:
+                    fpk.addfile(ti, fp)
+        
+        # Add ICON.PNG, ICON_256.PNG, and icon.png explicitly with exact case
+        for icon_name in ["ICON.PNG", "ICON_256.PNG", "icon.png"]:
+            ti = tarfile.TarInfo(name=icon_name)
+            ti.size = len(official_icon_bytes)
+            ti.mode = 0o644
+            ti.uid = 0
+            ti.gid = 0
+            ti.uname = "root"
+            ti.gname = "root"
+            ti.type = tarfile.REGTYPE
+            fpk.addfile(ti, io.BytesIO(official_icon_bytes))
 
-print(f"FPK built successfully! Size: {os.path.getsize(OUTPUT_FPK)} bytes")
+    size_bytes = os.path.getsize(output_fpk)
+    md5_hash = hashlib.md5(open(output_fpk, "rb").read()).hexdigest()
+    print(f"[{arch_tag.upper()}] FPK built successfully! Size: {size_bytes} bytes, MD5: {md5_hash}")
 
-# Verify contents of FPK
-print("\n=== Contents of generated FPK ===")
-with tarfile.open(OUTPUT_FPK, "r:gz") as tar:
-    for m in tar.getmembers():
-        print(f"  {m.name:<30} {m.size:>8} bytes, mode={oct(m.mode)}")
+    if is_arm:
+        # Also create copies with common arm aliases for maximum compatibility
+        for alias in ["aarch64", "arm"]:
+            alias_fpk = os.path.join(BASE_DIR, f"guangyapan-1.0.3-{alias}.fpk")
+            shutil.copy2(output_fpk, alias_fpk)
+            print(f"Created alias package: {alias_fpk}")
+
+    return output_fpk
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Guangyapan fnOS FPK Builder")
+    parser.add_argument("--arch", choices=["x86_64", "arm64", "all"], default="all", help="Target architecture (default: all)")
+    args = parser.parse_args()
+
+    if args.arch == "all":
+        build_package("x86_64")
+        build_package("arm64")
+    else:
+        build_package(args.arch)
