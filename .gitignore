@@ -19,6 +19,10 @@
 # Sensitive configurations
 config.json
 !config.example.json
+.env
+.env.*
+*.local
+credentials.json
 
 # Python caches
 __pycache__/
