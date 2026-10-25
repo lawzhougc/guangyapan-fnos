@@ -1,0 +1,52 @@
+name: Scheduled Publish Release v1.2.1
+
+on:
+  schedule:
+    # 2026-10-27 08:00:00 北京时间 (UTC+8) = 2026-10-27 00:00:00 UTC
+    - cron: '0 0 27 10 *'
+    # 08:10 北京时间冗余巡检（若已发布则自动跳过）
+    - cron: '10 0 27 10 *'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: '需要转为正式发布的版本标签 (默认 v1.2.1)'
+        required: false
+        default: 'v1.2.1'
+
+permissions:
+  contents: write
+
+jobs:
+  publish-draft-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish Draft Release v1.2.1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_TAG: ${{ github.event.inputs.tag_name || 'v1.2.1' }}
+        run: |
+          echo "Checking releases for tag: ${TARGET_TAG} ..."
+          RELEASE_JSON=$(gh api "/repos/${{ github.repository }}/releases" --jq ".[] | select(.tag_name == \"${TARGET_TAG}\")")
+          if [ -z "$RELEASE_JSON" ]; then
+            echo "No release found for ${TARGET_TAG}."
+            exit 0
+          fi
+
+          RELEASE_ID=$(echo "$RELEASE_JSON" | jq -r '.id')
+          IS_DRAFT=$(echo "$RELEASE_JSON" | jq -r '.draft')
+          echo "Found release ID=${RELEASE_ID}, draft=${IS_DRAFT}"
+
+          if [ "$IS_DRAFT" = "true" ]; then
+            echo "Publishing draft release ${TARGET_TAG} (ID: ${RELEASE_ID})..."
+            gh api \
+              --method PATCH \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${{ github.repository }}/releases/${RELEASE_ID}" \
+              -f tag_name="${TARGET_TAG}" \
+              -F draft=false \
+              -F prerelease=false \
+              -f make_latest="true"
+            echo "Successfully published ${TARGET_TAG}!"
+          else
+            echo "Release ${TARGET_TAG} is already published. Skipping."
+          fi

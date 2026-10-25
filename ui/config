@@ -2,7 +2,7 @@
     ".url": {
         "guangyapan.Application": {
             "title": "光鸭网盘",
-            "desc": "光鸭网盘 Web 管理端 (by chaos)",
+            "desc": "光鸭网盘 Web 管理端 (端口: 8998 | 网页直连: http://<NAS_IP>:8998)",
             "icon": "images/icon_{0}.png",
             "type": "iframe",
             "protocol": "http",

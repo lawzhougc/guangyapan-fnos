@@ -3,6 +3,7 @@ import json
 import time
 import re
 import glob
+import socket
 import threading
 import urllib.parse
 import urllib.request
@@ -10,9 +11,44 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from .client import GuangyapanClient
 from .downloader import FileDownloader, fix_permissions, format_size, format_speed
 
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.2.1"
 GITHUB_REPO_URL = "https://github.com/lawzhougc/guangyapan-fnos"
 _VERSION_CACHE = {"last_check": 0, "data": None}
+
+STRM_VIDEO_EXTS = {
+    "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "ts", "m2ts",
+    "m4v", "rmvb", "rm", "iso", "mpg", "mpeg", "vob", "3gp", "f4v"
+}
+STRM_SUB_EXTS = {"srt", "ass", "ssa", "vtt", "sub", "idx", "sup", "smi"}
+STRM_META_EXTS = {"nfo", "jpg", "jpeg", "png", "tbn"}
+
+def detect_local_ip():
+    """Auto-detect the primary LAN IPv4 address of the NAS host."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.5)
+        s.connect(("223.5.5.5", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+    try:
+        hostname = socket.gethostname()
+        ip = socket.gethostbyname(hostname)
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+def sanitize_fs_name(name: str) -> str:
+    """Sanitize a cloud file/folder name so it is safe on Linux/Windows filesystems."""
+    if not name:
+        return "unnamed"
+    cleaned = re.sub(r'[/\\:\x00]', '_', name).strip()
+    return cleaned or "unnamed"
 
 def get_fnos_storage_volumes():
     """Discover all mounted storage volumes on fnOS (e.g. /vol1, /vol2, /vol01)."""
@@ -100,6 +136,20 @@ class GuangyapanApp:
         self.downloader = FileDownloader(use_aria2=True)
         # task_id -> task dict
         self.downloads = {}
+        self.download_queue_lock = threading.Lock()
+        self._task_seq = 0
+        saved_concurrency = self.client.config.get("max_concurrent_downloads", 3)
+        try:
+            self.max_concurrent_downloads = max(1, min(16, int(saved_concurrency or 3)))
+        except Exception:
+            self.max_concurrent_downloads = 3
+
+        saved_page_size = self.client.config.get("file_page_size", 20)
+        try:
+            self.file_page_size = max(0, min(5000, int(saved_page_size if saved_page_size is not None else 20)))
+        except Exception:
+            self.file_page_size = 20
+
         # Default download dir dynamically resolved
         saved_dir = self.client.config.get("download_dir", "")
         self.download_dir = detect_default_download_dir(saved_dir)
@@ -108,6 +158,60 @@ class GuangyapanApp:
             fix_permissions(self.download_dir)
         except Exception:
             pass
+
+        # ================= STRM Media Library & 302 Gateway State =================
+        saved_strm = self.client.config.get("strm_config", {}) or {}
+        default_strm_dir = os.path.join(self.download_dir, "STRM影视库").replace("\\", "/")
+        default_base_url = f"http://{detect_local_ip()}:8998"
+        self.strm_config = {
+            "base_url": (saved_strm.get("base_url") or default_base_url).rstrip("/"),
+            "output_dir": (saved_strm.get("output_dir") or default_strm_dir).replace("\\", "/"),
+            "cloud_parent_id": saved_strm.get("cloud_parent_id", ""),
+            "cloud_folder_path": saved_strm.get("cloud_folder_path") or "全部文件",
+            "download_subtitles": bool(saved_strm.get("download_subtitles", True)),
+            "download_metadata": bool(saved_strm.get("download_metadata", False)),
+            "overwrite": bool(saved_strm.get("overwrite", True)),
+            "clean_orphans": bool(saved_strm.get("clean_orphans", False)),
+            "auto_sync_offline": bool(saved_strm.get("auto_sync_offline", True)),
+            "schedule_interval_min": int(saved_strm.get("schedule_interval_min", 0) or 0),
+            "use_proxy": bool(saved_strm.get("use_proxy", False)),
+        }
+        try:
+            os.makedirs(self.strm_config["output_dir"], exist_ok=True)
+            fix_permissions(self.strm_config["output_dir"])
+        except Exception:
+            pass
+
+        self.strm_cache_lock = threading.Lock()
+        self.strm_url_cache = {}  # file_id -> {"url": signed_url, "expires_at": ts, "cached_at": ts, "hits": 0}
+        self.strm_total_hits = 0
+
+        self.strm_sync_lock = threading.Lock()
+        self.strm_cancel_flag = False
+        self.strm_status = {
+            "running": False,
+            "taskId": "",
+            "status": "idle",  # idle | running | completed | failed | cancelled
+            "reason": "",
+            "currentDir": "",
+            "currentFile": "",
+            "scannedDirs": 0,
+            "scannedFiles": 0,
+            "createdStrm": 0,
+            "updatedStrm": 0,
+            "skippedStrm": 0,
+            "downloadedSubs": 0,
+            "cleanedFiles": 0,
+            "failedCount": 0,
+            "startTime": None,
+            "finishTime": None,
+            "error": None,
+            "recentFiles": [],
+            "logs": []
+        }
+        self._seen_completed_offline_ids = None  # None until first baseline scan
+        self._last_scheduled_sync_ts = time.time()
+        threading.Thread(target=self._strm_background_scheduler, daemon=True).start()
 
     def set_download_dir(self, new_dir: str):
         self.download_dir = new_dir.rstrip("/\\")
@@ -119,91 +223,724 @@ class GuangyapanApp:
         except Exception:
             pass
 
-    def start_download_task(self, file_id: str, file_name: str, target_dir: str = None):
-        target_dir = target_dir or self.download_dir
+    # ================= STRM Gateway & Sync Engine Methods =================
+    def save_strm_config(self, new_cfg: dict) -> dict:
+        if "base_url" in new_cfg and new_cfg["base_url"]:
+            self.strm_config["base_url"] = str(new_cfg["base_url"]).strip().rstrip("/")
+        if "output_dir" in new_cfg and new_cfg["output_dir"]:
+            self.strm_config["output_dir"] = str(new_cfg["output_dir"]).strip().rstrip("/\\").replace("\\", "/")
+            try:
+                os.makedirs(self.strm_config["output_dir"], exist_ok=True)
+                fix_permissions(self.strm_config["output_dir"])
+            except Exception:
+                pass
+        if "cloud_parent_id" in new_cfg:
+            self.strm_config["cloud_parent_id"] = str(new_cfg["cloud_parent_id"] or "")
+        if "cloud_folder_path" in new_cfg:
+            self.strm_config["cloud_folder_path"] = str(new_cfg["cloud_folder_path"] or "全部文件")
+        for bool_key in ("download_subtitles", "download_metadata", "overwrite", "clean_orphans", "auto_sync_offline", "use_proxy"):
+            if bool_key in new_cfg:
+                self.strm_config[bool_key] = bool(new_cfg[bool_key])
+        if "schedule_interval_min" in new_cfg:
+            try:
+                self.strm_config["schedule_interval_min"] = max(0, int(new_cfg["schedule_interval_min"]))
+            except Exception:
+                pass
+
+        self.client.config["strm_config"] = self.strm_config
+        self.client._save_config()
+        return self.strm_config
+
+    def get_strm_redirect_url(self, file_id: str) -> str:
+        """Resolve and cache Guangyapan CDN signedURL for fast 302 streaming."""
+        now = time.time()
+        with self.strm_cache_lock:
+            entry = self.strm_url_cache.get(file_id)
+            if entry and now < entry["expires_at"] and entry.get("url"):
+                entry["hits"] = entry.get("hits", 0) + 1
+                self.strm_total_hits += 1
+                return entry["url"]
+
+        dl_info = self.client.get_download_url(file_id)
+        signed_url = dl_info.get("signedURL")
+        if not signed_url:
+            raise RuntimeError("未能获取到光鸭网盘播放直链 (请检查账号登录状态或文件是否已删除)")
+
+        duration = int(dl_info.get("urlDuration") or 1800)
+        ttl = max(60, min(duration - 180, 1800))
+        with self.strm_cache_lock:
+            if len(self.strm_url_cache) > 600:
+                expired_keys = [k for k, v in self.strm_url_cache.items() if now >= v["expires_at"]]
+                for k in expired_keys:
+                    self.strm_url_cache.pop(k, None)
+            self.strm_url_cache[file_id] = {
+                "url": signed_url,
+                "expires_at": now + ttl,
+                "cached_at": now,
+                "hits": 1
+            }
+        return signed_url
+
+    def clear_strm_cache(self):
+        with self.strm_cache_lock:
+            count = len(self.strm_url_cache)
+            self.strm_url_cache.clear()
+            return count
+
+    def get_strm_status_payload(self) -> dict:
+        now = time.time()
+        with self.strm_cache_lock:
+            valid_cache = sum(1 for v in self.strm_url_cache.values() if now < v["expires_at"])
+        return {
+            "config": self.strm_config,
+            "detected_ip": detect_local_ip(),
+            "cache_count": valid_cache,
+            "total_hits": self.strm_total_hits,
+            "status": self.strm_status
+        }
+
+    def cancel_strm_sync(self):
+        self.strm_cancel_flag = True
+        if self.strm_status.get("running"):
+            self.strm_status["status"] = "cancelled"
+
+    def _add_strm_log(self, msg: str):
+        ts = time.strftime("%H:%M:%S")
+        line = f"[{ts}] {msg}"
+        logs = self.strm_status.get("logs", [])
+        logs.append(line)
+        if len(logs) > 120:
+            del logs[:len(logs) - 120]
+
+    def start_strm_sync_task(
+        self,
+        cloud_parent_id: str = None,
+        cloud_folder_path: str = None,
+        output_dir: str = None,
+        single_file: dict = None,
+        keep_root_folder: bool = False,
+        download_subtitles: bool = None,
+        reason: str = "手动触发"
+    ) -> dict:
+        with self.strm_sync_lock:
+            if self.strm_status.get("running"):
+                return {"started": False, "error": "当前已有 STRM 同步任务正在运行中", "status": self.strm_status}
+            self.strm_cancel_flag = False
+            task_id = str(int(time.time() * 1000))
+            self.strm_status.update({
+                "running": True,
+                "taskId": task_id,
+                "status": "running",
+                "reason": reason,
+                "currentDir": "",
+                "currentFile": "",
+                "scannedDirs": 0,
+                "scannedFiles": 0,
+                "createdStrm": 0,
+                "updatedStrm": 0,
+                "skippedStrm": 0,
+                "downloadedSubs": 0,
+                "cleanedFiles": 0,
+                "failedCount": 0,
+                "startTime": time.time(),
+                "finishTime": None,
+                "error": None,
+                "logs": []
+            })
+
+        target_parent_id = self.strm_config["cloud_parent_id"] if cloud_parent_id is None else cloud_parent_id
+        target_cloud_path = self.strm_config["cloud_folder_path"] if cloud_folder_path is None else cloud_folder_path
+        base_out_dir = (output_dir or self.strm_config["output_dir"]).rstrip("/\\").replace("\\", "/")
+        dl_subs = self.strm_config["download_subtitles"] if download_subtitles is None else bool(download_subtitles)
+        dl_meta = self.strm_config.get("download_metadata", False)
+        do_overwrite = self.strm_config.get("overwrite", True)
+        do_clean = self.strm_config.get("clean_orphans", False) and (single_file is None) and (not keep_root_folder)
+        base_url = (self.strm_config.get("base_url") or f"http://{detect_local_ip()}:8998").rstrip("/")
+        use_proxy = self.strm_config.get("use_proxy", False)
+
+        def worker():
+            expected_strm_set = set()
+            try:
+                os.makedirs(base_out_dir, exist_ok=True)
+                fix_permissions(base_out_dir)
+                self._add_strm_log(f"🚀 开始 STRM 任务 ({reason}) -> 目标: {base_out_dir}")
+
+                def write_strm_file(fid: str, fname: str, local_dir: str):
+                    safe_name = sanitize_fs_name(fname)
+                    stem, _ = os.path.splitext(safe_name)
+                    strm_name = f"{stem}.strm"
+                    strm_path = os.path.join(local_dir, strm_name).replace("\\", "/")
+                    expected_strm_set.add(os.path.normcase(os.path.abspath(strm_path)))
+
+                    enc_fid = urllib.parse.quote(str(fid), safe="")
+                    enc_name = urllib.parse.quote(fname, safe="")
+                    proxy_q = "?proxy=1" if use_proxy else ""
+                    stream_url = f"{base_url}/strm/{enc_fid}/{enc_name}{proxy_q}"
+
+                    os.makedirs(local_dir, exist_ok=True)
+                    fix_permissions(local_dir)
+
+                    action_taken = "created"
+                    if os.path.exists(strm_path):
+                        try:
+                            with open(strm_path, "r", encoding="utf-8", errors="ignore") as rf:
+                                old_content = rf.read().strip()
+                        except Exception:
+                            old_content = ""
+
+                        if old_content == stream_url:
+                            self.strm_status["skippedStrm"] += 1
+                            action_taken = "skipped"
+                        elif do_overwrite:
+                            with open(strm_path, "w", encoding="utf-8") as wf:
+                                wf.write(stream_url + "\n")
+                            fix_permissions(strm_path)
+                            self.strm_status["updatedStrm"] += 1
+                            self._add_strm_log(f"🔄 更新: {strm_name}")
+                            action_taken = "updated"
+                        else:
+                            self.strm_status["skippedStrm"] += 1
+                            action_taken = "skipped"
+                    else:
+                        with open(strm_path, "w", encoding="utf-8") as wf:
+                            wf.write(stream_url + "\n")
+                        fix_permissions(strm_path)
+                        self.strm_status["createdStrm"] += 1
+                        self._add_strm_log(f"✅ 生成: {strm_name}")
+                        action_taken = "created"
+
+                    recent = self.strm_status.get("recentFiles", [])
+                    # Remove existing entry with same strmPath if any
+                    recent = [r for r in recent if r.get("strmPath") != strm_path]
+                    recent.insert(0, {
+                        "fileId": fid,
+                        "fileName": fname,
+                        "strmName": strm_name,
+                        "strmPath": strm_path,
+                        "streamUrl": stream_url,
+                        "action": action_taken,
+                        "time": int(time.time())
+                    })
+                    self.strm_status["recentFiles"] = recent[:60]
+
+                def download_aux(fid: str, fname: str, local_dir: str):
+                    safe_name = sanitize_fs_name(fname)
+                    aux_path = os.path.join(local_dir, safe_name).replace("\\", "/")
+                    if os.path.exists(aux_path) and os.path.getsize(aux_path) > 0:
+                        return
+                    try:
+                        os.makedirs(local_dir, exist_ok=True)
+                        fix_permissions(local_dir)
+                        dl_info = self.client.get_download_url(fid)
+                        s_url = dl_info.get("signedURL")
+                        if not s_url:
+                            return
+                        req = urllib.request.Request(s_url, headers={"User-Agent": self.client.USER_AGENT})
+                        with urllib.request.urlopen(req, timeout=15) as resp, open(aux_path, "wb") as out_f:
+                            out_f.write(resp.read())
+                        fix_permissions(aux_path)
+                        self.strm_status["downloadedSubs"] += 1
+                        self._add_strm_log(f"📝 同步字幕/元数据: {safe_name}")
+                    except Exception as ex:
+                        self._add_strm_log(f"⚠️ 附属文件下载跳过 ({safe_name}): {ex}")
+
+                def scan_folder(pid: str, rel_display: str, current_local_dir: str):
+                    if self.strm_cancel_flag:
+                        return
+                    self.strm_status["scannedDirs"] += 1
+                    self.strm_status["currentDir"] = rel_display
+                    self._add_strm_log(f"📂 扫描目录: {rel_display}")
+
+                    items = self.client.list_all_files(parent_id=pid)
+                    for item in items:
+                        if self.strm_cancel_flag:
+                            return
+                        fname = (item.get("fileName") or "").strip()
+                        fid = item.get("fileId") or ""
+                        res_type = item.get("resType")
+                        if not fname or not fid:
+                            continue
+
+                        if res_type == 2:
+                            if fname == "保险箱":
+                                continue
+                            next_rel = f"{rel_display}/{fname}" if rel_display else fname
+                            next_local = os.path.join(current_local_dir, sanitize_fs_name(fname)).replace("\\", "/")
+                            scan_folder(fid, next_rel, next_local)
+                        else:
+                            self.strm_status["scannedFiles"] += 1
+                            self.strm_status["currentFile"] = fname
+                            ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+                            fsize = int(item.get("fileSize") or 0)
+                            try:
+                                if ext in STRM_VIDEO_EXTS:
+                                    write_strm_file(fid, fname, current_local_dir)
+                                elif dl_subs and ext in STRM_SUB_EXTS and fsize <= 30 * 1024 * 1024:
+                                    download_aux(fid, fname, current_local_dir)
+                                elif dl_meta and ext in STRM_META_EXTS and fsize <= 20 * 1024 * 1024:
+                                    download_aux(fid, fname, current_local_dir)
+                            except Exception as item_err:
+                                self.strm_status["failedCount"] += 1
+                                self._add_strm_log(f"❌ 处理失败 ({fname}): {item_err}")
+
+                if single_file:
+                    sf_id = single_file.get("fileId", "")
+                    sf_name = single_file.get("fileName", "")
+                    self.strm_status["scannedFiles"] = 1
+                    self.strm_status["currentFile"] = sf_name
+                    write_strm_file(sf_id, sf_name, base_out_dir)
+                else:
+                    start_local_dir = base_out_dir
+                    if keep_root_folder and target_cloud_path and target_cloud_path != "全部文件":
+                        root_folder_name = target_cloud_path.split("/")[-1].strip()
+                        if root_folder_name and root_folder_name != "全部文件":
+                            start_local_dir = os.path.join(base_out_dir, sanitize_fs_name(root_folder_name)).replace("\\", "/")
+                    scan_folder(target_parent_id, target_cloud_path or "全部文件", start_local_dir)
+
+                    if do_clean and not self.strm_cancel_flag and os.path.exists(start_local_dir):
+                        for root_d, _, files in os.walk(start_local_dir):
+                            for f in files:
+                                if f.lower().endswith(".strm"):
+                                    full_p = os.path.join(root_d, f)
+                                    norm_p = os.path.normcase(os.path.abspath(full_p))
+                                    if norm_p not in expected_strm_set:
+                                        try:
+                                            os.remove(full_p)
+                                            self.strm_status["cleanedFiles"] += 1
+                                            self._add_strm_log(f"🗑️ 清理失效 STRM: {f}")
+                                        except Exception:
+                                            pass
+
+                if self.strm_cancel_flag:
+                    self.strm_status["status"] = "cancelled"
+                    self._add_strm_log("⏹️ 同步任务已手动停止")
+                else:
+                    self.strm_status["status"] = "completed"
+                    self._add_strm_log(
+                        f"🎉 同步完成！新增 {self.strm_status['createdStrm']} 个，更新 {self.strm_status['updatedStrm']} 个，"
+                        f"跳过 {self.strm_status['skippedStrm']} 个，字幕 {self.strm_status['downloadedSubs']} 个"
+                    )
+            except Exception as e:
+                self.strm_status["status"] = "failed"
+                self.strm_status["error"] = str(e)
+                self._add_strm_log(f"❌ 同步异常中断: {e}")
+            finally:
+                self.strm_status["running"] = False
+                self.strm_status["finishTime"] = time.time()
+                self._last_scheduled_sync_ts = time.time()
+
+        threading.Thread(target=worker, daemon=True).start()
+        return {"started": True, "taskId": task_id, "status": self.strm_status}
+
+    def check_offline_tasks_for_strm(self, task_list: list):
+        """Detect newly finished cloud offline tasks and auto-trigger incremental STRM sync."""
+        if not isinstance(task_list, list):
+            return
+        completed_ids = set()
+        newly_done_names = []
+        for t in task_list:
+            tid = str(t.get("taskId") or "")
+            if not tid:
+                continue
+            if t.get("status") == 2 or bool(t.get("fileId")):
+                completed_ids.add(tid)
+                if self._seen_completed_offline_ids is not None and tid not in self._seen_completed_offline_ids:
+                    newly_done_names.append(t.get("fileName") or tid)
+
+        if self._seen_completed_offline_ids is None:
+            self._seen_completed_offline_ids = completed_ids
+            return
+
+        self._seen_completed_offline_ids.update(completed_ids)
+        if newly_done_names and self.strm_config.get("auto_sync_offline", True):
+            if not self.strm_status.get("running") and self.client.access_token:
+                sample_name = newly_done_names[0]
+                self.start_strm_sync_task(reason=f"离线下载完成联动 ({sample_name})")
+
+    def _strm_background_scheduler(self):
+        """Background daemon checking scheduled STRM sync intervals."""
+        while True:
+            time.sleep(30)
+            try:
+                interval_min = int(self.strm_config.get("schedule_interval_min") or 0)
+                if interval_min > 0 and self.client.access_token and not self.strm_status.get("running"):
+                    if (time.time() - self._last_scheduled_sync_ts) >= interval_min * 60:
+                        self._last_scheduled_sync_ts = time.time()
+                        self.start_strm_sync_task(reason=f"定时自动同步 (每 {interval_min} 分钟)")
+            except Exception:
+                pass
+
+    def set_max_concurrent_downloads(self, limit: int) -> int:
         try:
-            os.makedirs(target_dir, exist_ok=True)
-            fix_permissions(target_dir)
+            val = max(1, min(16, int(limit)))
+        except Exception:
+            val = 3
+        self.max_concurrent_downloads = val
+        self.client.config["max_concurrent_downloads"] = val
+        self.client._save_config()
+        self._schedule_downloads()
+        return self.max_concurrent_downloads
+
+    def set_file_page_size(self, page_size: int) -> int:
+        try:
+            val = max(0, min(5000, int(page_size)))
+        except Exception:
+            val = 20
+        self.file_page_size = val
+        self.client.config["file_page_size"] = val
+        self.client._save_config()
+        return self.file_page_size
+
+    def _run_download_worker(self, task_id: str):
+        task = self.downloads.get(task_id)
+        if not task:
+            self._schedule_downloads()
+            return
+
+        file_id = task["fileId"]
+        out_path = task["path"]
+        target_dir = task["targetDir"]
+
+        try:
+            try:
+                os.makedirs(target_dir, exist_ok=True)
+                fix_permissions(target_dir)
+            except Exception:
+                pass
+
+            if task.get("status") in ("cancelled", "pending"):
+                return
+
+            task["status"] = "getting_url"
+            task["speed"] = "获取直链中..."
+            dl_info = self.client.get_download_url(file_id)
+            signed_url = dl_info.get("signedURL")
+            if not signed_url:
+                raise RuntimeError("未能获取到下载直链 (请检查网盘账号或文件是否存在)")
+
+            if task.get("status") in ("cancelled", "pending"):
+                return
+
+            task["status"] = "downloading"
+            task["speed"] = "连接中..."
+
+            def progress(p):
+                if task_id not in self.downloads:
+                    return
+                if "percent" in p:
+                    self.downloads[task_id]["percent"] = p["percent"]
+                if "speed" in p:
+                    self.downloads[task_id]["speed"] = p["speed"]
+                if "downloaded" in p:
+                    self.downloads[task_id]["downloaded"] = p["downloaded"]
+                if "total" in p:
+                    self.downloads[task_id]["total"] = p["total"]
+                if "eta" in p:
+                    self.downloads[task_id]["eta"] = p["eta"]
+                elif "raw" in p:
+                    self.downloads[task_id]["raw"] = p["raw"]
+
+            ok = self.downloader.download(signed_url, out_path, progress, task_id=task_id)
+            if task_id not in self.downloads:
+                return
+            curr_status = self.downloads[task_id].get("status")
+            if curr_status == "pending":
+                # Re-queued due to concurrency limit reduction; keep partial progress
+                self.downloads[task_id]["speed"] = "排队等待中"
+                self.downloads[task_id]["eta"] = "--"
+                return
+            if curr_status == "cancelled":
+                return
+
+            if ok:
+                self.downloads[task_id]["status"] = "completed"
+                self.downloads[task_id]["percent"] = 100
+                self.downloads[task_id]["speed"] = "完成"
+                self.downloads[task_id]["eta"] = "0s"
+                self.downloads[task_id]["finishTime"] = time.time()
+                self.downloads[task_id]["error"] = None
+                fix_permissions(out_path)
+            else:
+                self.downloads[task_id]["status"] = "failed"
+                self.downloads[task_id]["error"] = "下载未正常完成"
+        except Exception as e:
+            if task_id in self.downloads and self.downloads[task_id].get("status") not in ("cancelled", "pending"):
+                self.downloads[task_id]["status"] = "failed"
+                self.downloads[task_id]["error"] = str(e)
+        finally:
+            self._schedule_downloads()
+
+    def _schedule_downloads(self):
+        to_start = []
+        to_pause = []
+        with self.download_queue_lock:
+            active_tasks = [
+                t for t in self.downloads.values()
+                if t.get("status") in ("getting_url", "downloading")
+            ]
+            active_tasks.sort(key=lambda x: x.get("seq", 0))
+
+            # If concurrency limit was lowered below active count, pause newest active tasks back to pending
+            if len(active_tasks) > self.max_concurrent_downloads:
+                excess = active_tasks[self.max_concurrent_downloads:]
+                for t in excess:
+                    t["status"] = "pending"
+                    t["speed"] = "排队等待中"
+                    t["eta"] = "--"
+                    to_pause.append(t["taskId"])
+            elif len(active_tasks) < self.max_concurrent_downloads:
+                slots = self.max_concurrent_downloads - len(active_tasks)
+                pending_tasks = [
+                    t for t in self.downloads.values()
+                    if t.get("status") == "pending"
+                ]
+                pending_tasks.sort(key=lambda x: x.get("seq", 0))
+                for t in pending_tasks[:slots]:
+                    t["status"] = "getting_url"
+                    t["speed"] = "准备启动..."
+                    t["error"] = None
+                    to_start.append(t["taskId"])
+
+        for tid in to_pause:
+            self.downloader.cancel_task(tid)
+
+        for tid in to_start:
+            threading.Thread(target=self._run_download_worker, args=(tid,), daemon=True).start()
+
+    def _resolve_conflict_filename(self, target_dir: str, file_name: str, conflict_policy: str = "overwrite") -> str:
+        safe_name = sanitize_fs_name(file_name)
+        full_path = os.path.join(target_dir, safe_name)
+        aria2_ctrl = full_path + ".aria2"
+        # Only treat as existing complete file if file exists and no .aria2 resume file is present
+        if os.path.exists(full_path) and not os.path.exists(aria2_ctrl):
+            if conflict_policy == "skip":
+                return ""
+            elif conflict_policy == "rename":
+                base, ext = os.path.splitext(safe_name)
+                counter = 1
+                while True:
+                    cand = f"{base} ({counter}){ext}"
+                    if not os.path.exists(os.path.join(target_dir, cand)):
+                        return cand
+                    counter += 1
+        return safe_name
+
+    def _enqueue_single_download(self, file_id: str, file_name: str, target_dir: str, file_size: int = 0) -> str:
+        target_dir = (target_dir or self.download_dir).rstrip("/\\").replace("\\", "/")
+        out_path = os.path.join(target_dir, file_name).replace("\\", "/")
+        with self.download_queue_lock:
+            self._task_seq += 1
+            seq = self._task_seq
+            task_id = f"{int(time.time() * 1000)}_{seq}"
+            self.downloads[task_id] = {
+                "taskId": task_id,
+                "seq": seq,
+                "fileId": file_id,
+                "fileName": file_name,
+                "status": "pending",
+                "percent": 0,
+                "speed": "排队等待中",
+                "downloaded": "--",
+                "total": format_size(int(file_size)) if file_size else "--",
+                "eta": "--",
+                "path": out_path,
+                "targetDir": target_dir,
+                "startTime": time.time(),
+                "finishTime": None,
+                "error": None
+            }
+        return task_id
+
+    def start_download_task(self, file_id: str, file_name: str, target_dir: str = None, file_size: int = 0):
+        task_id = self._enqueue_single_download(file_id, file_name, target_dir or self.download_dir, file_size=file_size)
+        self._schedule_downloads()
+        return task_id
+
+    def start_batch_download_tasks(self, items: list, target_dir: str = None, conflict_policy: str = "overwrite") -> dict:
+        base_target_dir = (target_dir or self.download_dir).rstrip("/\\").replace("\\", "/")
+        try:
+            os.makedirs(base_target_dir, exist_ok=True)
+            fix_permissions(base_target_dir)
         except Exception:
             pass
 
-        out_path = os.path.join(target_dir, file_name)
-        task_id = str(int(time.time() * 1000))
+        queued_ids = []
+        skipped_count = 0
+        folder_queue = []
 
-        self.downloads[task_id] = {
-            "taskId": task_id,
-            "fileId": file_id,
-            "fileName": file_name,
-            "status": "pending",
-            "percent": 0,
-            "speed": "0 KB/s",
-            "downloaded": "--",
-            "total": "--",
-            "eta": "--",
-            "path": out_path,
-            "targetDir": target_dir,
-            "startTime": time.time(),
-            "finishTime": None,
-            "error": None
+        for item in (items or []):
+            fid = str(item.get("fileId") or "").strip()
+            fname = str(item.get("fileName") or "").strip()
+            res_type = int(item.get("resType") or 1)
+            fsize = int(item.get("fileSize") or 0)
+            if not fid or not fname:
+                continue
+
+            if res_type == 2:
+                if fname == "保险箱":
+                    continue
+                sub_dir = os.path.join(base_target_dir, sanitize_fs_name(fname)).replace("\\", "/")
+                folder_queue.append((fid, sub_dir))
+            else:
+                resolved_name = self._resolve_conflict_filename(base_target_dir, fname, conflict_policy)
+                if not resolved_name:
+                    skipped_count += 1
+                    continue
+                tid = self._enqueue_single_download(fid, resolved_name, base_target_dir, file_size=fsize)
+                queued_ids.append(tid)
+
+        # Process up to 5 folders synchronously so the user immediately sees queued tasks,
+        # and if more nested folders remain, continue expanding in background
+        sync_folders_processed = 0
+        while folder_queue and sync_folders_processed < 5:
+            curr_fid, curr_local_dir = folder_queue.pop(0)
+            sync_folders_processed += 1
+            try:
+                children = self.client.list_all_files(parent_id=curr_fid)
+                for child in children:
+                    cfid = str(child.get("fileId") or "").strip()
+                    cfname = str(child.get("fileName") or "").strip()
+                    ctype = int(child.get("resType") or 1)
+                    csize = int(child.get("fileSize") or 0)
+                    if not cfid or not cfname:
+                        continue
+                    if ctype == 2:
+                        if cfname == "保险箱":
+                            continue
+                        next_local = os.path.join(curr_local_dir, sanitize_fs_name(cfname)).replace("\\", "/")
+                        folder_queue.append((cfid, next_local))
+                    else:
+                        resolved_name = self._resolve_conflict_filename(curr_local_dir, cfname, conflict_policy)
+                        if not resolved_name:
+                            skipped_count += 1
+                            continue
+                        tid = self._enqueue_single_download(cfid, resolved_name, curr_local_dir, file_size=csize)
+                        queued_ids.append(tid)
+            except Exception as ex:
+                print("Error scanning folder for batch download:", ex)
+
+        self._schedule_downloads()
+
+        if folder_queue:
+            remaining = list(folder_queue)
+            def bg_expand():
+                q = remaining
+                while q:
+                    curr_fid, curr_local_dir = q.pop(0)
+                    try:
+                        children = self.client.list_all_files(parent_id=curr_fid)
+                        added_any = False
+                        for child in children:
+                            cfid = str(child.get("fileId") or "").strip()
+                            cfname = str(child.get("fileName") or "").strip()
+                            ctype = int(child.get("resType") or 1)
+                            csize = int(child.get("fileSize") or 0)
+                            if not cfid or not cfname:
+                                continue
+                            if ctype == 2:
+                                if cfname == "保险箱":
+                                    continue
+                                next_local = os.path.join(curr_local_dir, sanitize_fs_name(cfname)).replace("\\", "/")
+                                q.append((cfid, next_local))
+                            else:
+                                resolved_name = self._resolve_conflict_filename(curr_local_dir, cfname, conflict_policy)
+                                if not resolved_name:
+                                    continue
+                                self._enqueue_single_download(cfid, resolved_name, curr_local_dir, file_size=csize)
+                                added_any = True
+                        if added_any:
+                            self._schedule_downloads()
+                    except Exception:
+                        pass
+            threading.Thread(target=bg_expand, daemon=True).start()
+
+        return {
+            "success": True,
+            "queuedCount": len(queued_ids),
+            "skippedCount": skipped_count,
+            "taskIds": queued_ids,
+            "expandingFolders": len(folder_queue) > 0
         }
 
-        def worker():
-            try:
-                self.downloads[task_id]["status"] = "getting_url"
-                dl_info = self.client.get_download_url(file_id)
-                signed_url = dl_info.get("signedURL")
-                if not signed_url:
-                    raise RuntimeError("未能获取到下载直链 (请检查网盘账号或文件是否存在)")
-
-                self.downloads[task_id]["status"] = "downloading"
-
-                def progress(p):
-                    if "percent" in p:
-                        self.downloads[task_id]["percent"] = p["percent"]
-                    if "speed" in p:
-                        self.downloads[task_id]["speed"] = p["speed"]
-                    if "downloaded" in p:
-                        self.downloads[task_id]["downloaded"] = p["downloaded"]
-                    if "total" in p:
-                        self.downloads[task_id]["total"] = p["total"]
-                    if "eta" in p:
-                        self.downloads[task_id]["eta"] = p["eta"]
-                    elif "raw" in p:
-                        self.downloads[task_id]["raw"] = p["raw"]
-
-                ok = self.downloader.download(signed_url, out_path, progress, task_id=task_id)
-                if ok:
-                    self.downloads[task_id]["status"] = "completed"
-                    self.downloads[task_id]["percent"] = 100
-                    self.downloads[task_id]["speed"] = "完成"
-                    self.downloads[task_id]["eta"] = "0s"
-                    self.downloads[task_id]["finishTime"] = time.time()
-                    fix_permissions(out_path)
-                else:
-                    if self.downloads[task_id]["status"] != "cancelled":
-                        self.downloads[task_id]["status"] = "failed"
-                        self.downloads[task_id]["error"] = "下载未正常完成"
-            except Exception as e:
-                self.downloads[task_id]["status"] = "failed"
-                self.downloads[task_id]["error"] = str(e)
-
-        threading.Thread(target=worker, daemon=True).start()
-        return task_id
+    def retry_download_task(self, task_id: str) -> bool:
+        with self.download_queue_lock:
+            t = self.downloads.get(task_id)
+            if not t:
+                return False
+            self._task_seq += 1
+            t["seq"] = self._task_seq
+            t["status"] = "pending"
+            t["speed"] = "排队等待中"
+            t["eta"] = "--"
+            t["error"] = None
+            t["finishTime"] = None
+        self._schedule_downloads()
+        return True
 
     def cancel_download_task(self, task_id: str):
         if task_id in self.downloads:
             self.downloads[task_id]["status"] = "cancelled"
+            self.downloads[task_id]["speed"] = "已取消"
+            self.downloads[task_id]["eta"] = "--"
             self.downloader.cancel_task(task_id)
+            self._schedule_downloads()
 
-    def delete_download_task(self, task_id: str):
+    def cancel_all_downloads(self) -> int:
+        to_kill = []
+        with self.download_queue_lock:
+            for tid, t in self.downloads.items():
+                if t.get("status") in ("pending", "getting_url", "downloading"):
+                    t["status"] = "cancelled"
+                    t["speed"] = "已取消"
+                    t["eta"] = "--"
+                    to_kill.append(tid)
+        for tid in to_kill:
+            self.downloader.cancel_task(tid)
+        return len(to_kill)
+
+    def _remove_local_task_files(self, file_path: str) -> bool:
+        if not file_path:
+            return False
+        removed = False
+        for p in (file_path, file_path + ".aria2"):
+            try:
+                if os.path.isfile(p) or os.path.islink(p):
+                    os.remove(p)
+                    removed = True
+            except Exception as e:
+                print(f"Failed to remove local file {p}: {e}")
+        return removed
+
+    def delete_download_task(self, task_id: str, delete_file: bool = False) -> dict:
+        task = None
+        was_running = False
         if task_id in self.downloads:
+            was_running = self.downloads[task_id].get("status") in ("downloading", "getting_url")
             self.downloader.cancel_task(task_id)
-            del self.downloads[task_id]
+            with self.download_queue_lock:
+                task = self.downloads.pop(task_id, None)
+            self._schedule_downloads()
+        file_deleted = False
+        if task and delete_file:
+            if was_running:
+                time.sleep(0.2)
+            file_deleted = self._remove_local_task_files(task.get("path", ""))
+        return {"deleted": bool(task), "fileDeleted": file_deleted}
 
-    def clear_completed_tasks(self):
-        to_del = [tid for tid, t in self.downloads.items() if t["status"] in ("completed", "failed", "cancelled")]
-        for tid in to_del:
-            del self.downloads[tid]
+    def clear_completed_tasks(self, delete_file: bool = False) -> dict:
+        removed_tasks = []
+        with self.download_queue_lock:
+            to_del = [tid for tid, t in self.downloads.items() if t["status"] in ("completed", "failed", "cancelled")]
+            for tid in to_del:
+                t = self.downloads.pop(tid, None)
+                if t:
+                    removed_tasks.append(t)
+        files_deleted = 0
+        if delete_file:
+            for t in removed_tasks:
+                if self._remove_local_task_files(t.get("path", "")):
+                    files_deleted += 1
+        return {"cleared": len(removed_tasks), "filesDeleted": files_deleted}
 
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="zh-CN">
@@ -991,6 +1728,54 @@ HTML_PAGE = """<!DOCTYPE html>
       min-height: 0;
     }
 
+    /* File Pagination Bar */
+    .file-pagination-bar {
+      flex-shrink: 0;
+      border-top: 1px solid var(--border-subtle);
+      padding: 10px 18px;
+      background: var(--bg-card);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      font-size: 12.5px;
+      color: var(--text-secondary);
+      user-select: none;
+    }
+
+    .page-btn {
+      min-width: 30px;
+      height: 30px;
+      padding: 0 8px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg-input);
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
+    }
+    .page-btn:hover:not(:disabled) {
+      border-color: var(--brand);
+      color: var(--brand);
+      background: var(--bg-hover);
+    }
+    .page-btn.active {
+      background: var(--brand);
+      border-color: var(--brand);
+      color: #fff;
+      font-weight: 600;
+    }
+    .page-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
     table {
       width: 100%;
       border-collapse: collapse;
@@ -1668,6 +2453,22 @@ HTML_PAGE = """<!DOCTYPE html>
         <span class="rail-badge" id="activeDlBadge" style="display: none;">0</span>
       </div>
 
+      <div class="rail-btn" id="navStrm" onclick="switchView('strm')" title="STRM 影视库与 302 播放网关">
+        <div class="rail-btn-icon">
+          <!-- Official Clapperboard / Stream SVG -->
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="18" rx="3"/>
+            <line x1="2" y1="8" x2="22" y2="8"/>
+            <line x1="7" y1="3" x2="5" y2="8"/>
+            <line x1="13" y1="3" x2="11" y2="8"/>
+            <line x1="19" y1="3" x2="17" y2="8"/>
+            <polygon points="10 11.5 16 14.5 10 17.5 10 11.5" fill="currentColor"/>
+          </svg>
+        </div>
+        <span class="rail-btn-label">STRM</span>
+        <span class="rail-badge dot" id="strmRunningBadge" style="display: none;"></span>
+      </div>
+
       <div class="rail-btn" id="navTrash" onclick="switchView('trash')" title="回收站">
         <div class="rail-btn-icon">
           <!-- Official TabbarRecycle SVG -->
@@ -1824,6 +2625,24 @@ HTML_PAGE = """<!DOCTYPE html>
                 </svg>
                 <span>云添加 (磁链/BT)</span>
               </button>
+              <button class="btn-secondary" onclick="openQuickStrmModalForCurrentDir()" title="将当前网盘目录一键生成为本地 STRM 影视库文件">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand);">
+                  <rect x="2" y="3" width="20" height="18" rx="3"/>
+                  <polygon points="10 9.5 16 12.5 10 15.5 10 9.5" fill="currentColor"/>
+                </svg>
+                <span>生成 STRM</span>
+              </button>
+              <button class="btn-secondary" id="batchDownloadBtn" onclick="promptBatchDownload()" title="勾选多个文件或文件夹后一键批量下载到 NAS">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand);" id="batchDownloadBtnIcon">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                <span id="batchDownloadBtnText">批量下载</span>
+              </button>
+              <button class="btn-danger" id="batchDeleteBtn" onclick="promptBatchDelete()" style="display: none;" title="批量删除所选文件或文件夹">
+                <span>🗑️ 批量删除 (<span id="batchDeleteCountText">0</span>)</span>
+              </button>
             </div>
 
             <div class="toolbar-right">
@@ -1877,6 +2696,42 @@ HTML_PAGE = """<!DOCTYPE html>
 
           <!-- Grid Container (when in grid view) -->
           <div id="fileGridContainer" style="display: none; flex: 1; overflow-y: auto; padding: 18px; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));"></div>
+
+          <!-- File Pagination Footer Bar -->
+          <div class="file-pagination-bar" id="filePaginationBar">
+            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+              <span id="filePaginationInfo" style="color: var(--text-secondary); font-weight: 500;">共 0 项</span>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="color: var(--text-muted); font-size: 12px;">每页显示:</span>
+                <select id="filePageSizeSelect" class="form-input" style="height: 30px; width: auto; min-width: 96px; padding: 0 8px; font-size: 12px; font-weight: 500;" onchange="onFilePageSizeSelectChange(this.value)">
+                  <option value="10">10 条/页</option>
+                  <option value="20" selected>20 条/页</option>
+                  <option value="50">50 条/页</option>
+                  <option value="100">100 条/页</option>
+                  <option value="200">200 条/页</option>
+                  <option value="0">全部显示</option>
+                  <option value="custom">自定义...</option>
+                </select>
+                <div id="filePageSizeCustomWrap" style="display: flex; align-items: center; gap: 4px;" title="可直接输入任意每页显示条数 (1~5000，输入 0 为全部显示)">
+                  <input type="number" id="filePageSizeCustomInput" class="form-input" min="0" max="5000" value="20" style="width: 62px; height: 30px; padding: 0 6px; text-align: center; font-size: 12px; font-weight: 600; color: var(--brand);" onchange="setFilePageSize(this.value)">
+                  <span style="font-size: 12px; color: var(--text-muted);">条/页</span>
+                </div>
+              </div>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;" id="filePaginationControls">
+              <button class="page-btn" id="btnFirstPage" onclick="goToFilePage(1)" title="第一页">⏮ 首页</button>
+              <button class="page-btn" id="btnPrevPage" onclick="changeFilePage(-1)" title="上一页">◀ 上一页</button>
+              <div id="filePageNumbersContainer" style="display: inline-flex; align-items: center; gap: 4px;"></div>
+              <button class="page-btn" id="btnNextPage" onclick="changeFilePage(1)" title="下一页">下一页 ▶</button>
+              <button class="page-btn" id="btnLastPage" onclick="goToFilePage(getTotalFilePages())" title="最后一页">末页 ⏭</button>
+              <div style="display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; font-size: 12px; color: var(--text-muted);">
+                <span>跳至</span>
+                <input type="number" id="filePageJumpInput" class="form-input" min="1" value="1" style="width: 52px; height: 30px; padding: 0 4px; text-align: center; font-size: 12px; font-weight: 600;" onchange="goToFilePage(this.value)">
+                <span>/ <strong id="fileTotalPagesText" style="color: var(--text-main);">1</strong> 页</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1904,17 +2759,198 @@ HTML_PAGE = """<!DOCTYPE html>
       <!-- VIEW 3: TRANSFERS (NAS LOCAL DOWNLOADS) -->
       <div class="content-view" id="view-transfers">
         <div class="official-card">
-          <div class="subtabs">
+          <div class="subtabs" style="flex-wrap: wrap; gap: 10px;">
             <div class="subtabs-left">
-              <button class="subtab-btn active" id="tabDlActiveBtn" onclick="switchTransferTab('active')">正在下载到 NAS (<span id="countActiveDl">0</span>)</button>
+              <button class="subtab-btn active" id="tabDlActiveBtn" onclick="switchTransferTab('active')">正在下载 / 排队中 (<span id="countActiveDl">0</span>)</button>
               <button class="subtab-btn" id="tabDlDoneBtn" onclick="switchTransferTab('done')">已下载完成 (<span id="countDoneDl">0</span>)</button>
             </div>
-            <div>
+            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <div style="display: flex; align-items: center; gap: 6px; background: var(--bg-input); padding: 4px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); font-size: 12.5px;">
+                <span style="color: var(--text-secondary); font-weight: 500;">⚡ 同时下载个数:</span>
+                <input type="number" id="transferMaxConcurrentInput" min="1" max="16" value="3"
+                  style="width: 54px; height: 26px; text-align: center; font-weight: 700; font-size: 13px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); color: var(--brand); outline: none;"
+                  onchange="updateMaxConcurrentSetting(this.value)">
+                <span style="color: var(--text-muted); font-size: 11.5px;">个 (1~16)</span>
+              </div>
+              <button class="btn-danger btn-sm" id="cancelAllDlBtn" onclick="cancelAllTransfers()" style="display: none;">⏹️ 全部取消</button>
               <button class="btn-outline btn-sm" onclick="clearCompletedDownloads()">清空已完成记录</button>
             </div>
           </div>
           <div class="task-list-container" id="transfersListContainer">
             <div style="text-align: center; color: var(--text-muted); padding: 40px;">暂无下载任务</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIEW 3.5: STRM MEDIA CENTER -->
+      <div class="content-view" id="view-strm">
+        <div class="official-card" style="overflow-y: auto; padding: 20px; gap: 18px;">
+          <!-- Top Banner -->
+          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; padding: 16px 20px; border-radius: var(--radius-md); background: var(--bg-subtle); border: 1px solid var(--border);">
+            <div style="display: flex; align-items: center; gap: 14px;">
+              <div style="width: 44px; height: 44px; border-radius: 12px; background: var(--vip-gradient); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 22px; flex-shrink: 0; box-shadow: var(--shadow-brand);">
+                🎬
+              </div>
+              <div>
+                <div style="font-size: 16px; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 8px;">
+                  <span>STRM 影视库 &amp; 302 动态串流网关</span>
+                  <span class="status-badge status-success" id="strmTopStatusBadge">就绪</span>
+                </div>
+                <div style="font-size: 12.5px; color: var(--text-muted); margin-top: 4px; line-height: 1.5;">
+                  将光鸭网盘海量视频以百字节 <code>.strm</code> 映射至飞牛影视 / Emby / Jellyfin / Infuse，零占用本地硬盘，302 动态直连光鸭 CDN 原画秒播。
+                </div>
+              </div>
+            </div>
+            <div style="display: flex; gap: 10px; align-items: center;">
+              <button class="btn-danger" id="strmCancelSyncBtn" onclick="cancelStrmSync()" style="display: none;">⏹️ 停止同步</button>
+              <button class="btn-primary" id="strmStartSyncBtn" onclick="triggerFullStrmSync()">⚡ 立即同步 STRM 影视库</button>
+            </div>
+          </div>
+
+          <!-- Two-Column Grid: Config (Left) + Status/Logs (Right) -->
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 18px; align-items: start;">
+
+            <!-- Left Card: STRM Mapping & Gateway Configuration -->
+            <div class="setting-card" style="gap: 14px;">
+              <div class="setting-card-title" style="display: flex; justify-content: space-between; align-items: center;">
+                <span>⚙️ 映射路径与播放网关配置</span>
+                <button class="btn-primary btn-sm" onclick="saveStrmConfig(true)">💾 保存配置</button>
+              </div>
+
+              <!-- 1. Cloud Source Folder -->
+              <div>
+                <label style="font-size: 12.5px; font-weight: 600; color: var(--text-main); display: block; margin-bottom: 6px;">1. 光鸭网盘源目录（扫描范围）：</label>
+                <div style="display: flex; gap: 8px;">
+                  <input type="text" class="form-input" id="strmCloudPathInput" style="flex: 1; font-family: monospace; cursor: pointer;" readonly value="全部文件" onclick="pickStrmCloudFolder()">
+                  <button class="btn-secondary" onclick="pickStrmCloudFolder()" style="flex-shrink: 0;">☁️ 选择网盘目录</button>
+                </div>
+                <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px;">支持映射整个网盘或指定特定影视文件夹（自动保持多级子目录树结构）。</div>
+              </div>
+
+              <!-- 2. Local NAS STRM Output Dir -->
+              <div>
+                <label style="font-size: 12.5px; font-weight: 600; color: var(--text-main); display: block; margin-bottom: 6px;">2. NAS 本地 STRM 存放目录（供飞牛影视/Emby 挂载）：</label>
+                <div style="display: flex; gap: 8px;">
+                  <input type="text" class="form-input" id="strmOutputDirInput" style="flex: 1; font-family: monospace;" placeholder="/vol1/1000/光鸭网盘/STRM影视库">
+                  <button class="btn-secondary" onclick="openFolderPicker(onStrmOutputFolderPicked, document.getElementById('strmOutputDirInput').value)" style="flex-shrink: 0;">📂 浏览 NAS 目录</button>
+                </div>
+                <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px;">在飞牛影视 / Emby / Jellyfin 媒体库中添加该 NAS 目录即可自动刮削海报墙。</div>
+              </div>
+
+              <!-- 3. STRM Gateway Base URL -->
+              <div>
+                <label style="font-size: 12.5px; font-weight: 600; color: var(--text-main); display: block; margin-bottom: 6px;">3. STRM 局域网/外网播放网关地址：</label>
+                <div style="display: flex; gap: 8px;">
+                  <input type="text" class="form-input" id="strmBaseUrlInput" style="flex: 1; font-family: monospace;" placeholder="http://192.168.31.186:8998">
+                  <button class="btn-secondary" onclick="autoFillStrmBaseUrl()" style="flex-shrink: 0;" title="自动填入检测到的 NAS 局域网 IP">🔄 自动获取IP</button>
+                </div>
+                <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px;">请勿填写 127.0.0.1，应使用 NAS 局域网 IP 或反代域名，确保电视/手机/Docker 均可访问。</div>
+              </div>
+
+              <!-- 4. Schedule Interval -->
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; background: var(--bg-input); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                <div>
+                  <div style="font-size: 13px; font-weight: 600; color: var(--text-main);">⏰ 定时自动增量同步</div>
+                  <div style="font-size: 11.5px; color: var(--text-muted);">后台定期扫描网盘新增影视并自动生成 .strm</div>
+                </div>
+                <select id="strmScheduleSelect" class="form-input" style="width: 150px; height: 34px; padding: 0 8px;">
+                  <option value="0">关闭定时同步</option>
+                  <option value="60">每 1 小时</option>
+                  <option value="180">每 3 小时</option>
+                  <option value="360">每 6 小时</option>
+                  <option value="720">每 12 小时</option>
+                  <option value="1440">每 24 小时</option>
+                </select>
+              </div>
+
+              <!-- 5. Checkboxes -->
+              <div style="display: flex; flex-direction: column; gap: 9px; padding: 12px; background: var(--bg-input); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); font-size: 12.5px; color: var(--text-main);">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                  <input type="checkbox" id="strmDlSubsCb" checked style="width: 15px; height: 15px; accent-color: var(--brand);">
+                  <span><strong>自动同步外挂字幕</strong>（下载同目录 <code>.srt / .ass / .vtt / .sub</code> 到本地）</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                  <input type="checkbox" id="strmDlMetaCb" style="width: 15px; height: 15px; accent-color: var(--brand);">
+                  <span><strong>同步 NFO 与海报图</strong>（下载同目录 <code>.nfo / .jpg / .png</code> 元数据）</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                  <input type="checkbox" id="strmAutoOfflineCb" checked style="width: 15px; height: 15px; accent-color: var(--brand);">
+                  <span><strong>离线下载完成自动联动</strong>（云添加任务完成后自动增量生成 STRM）</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                  <input type="checkbox" id="strmOverwriteCb" checked style="width: 15px; height: 15px; accent-color: var(--brand);">
+                  <span><strong>覆盖更新同名 STRM</strong>（当网关地址变更时自动刷新已有 .strm 内容）</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                  <input type="checkbox" id="strmCleanOrphansCb" style="width: 15px; height: 15px; accent-color: var(--brand);">
+                  <span><strong>清理失效残留 STRM</strong>（网盘源文件删除后，同步移除本地对应 .strm）</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                  <input type="checkbox" id="strmUseProxyCb" style="width: 15px; height: 15px; accent-color: var(--brand);">
+                  <span><strong>启用本地流式代理中转</strong>（默认关闭，推荐 302 直连光鸭 CDN 零 CPU 占用）</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Right Card: Real-time Sync Status, Stats & Recent STRM Files -->
+            <div class="setting-card" style="gap: 14px;">
+              <div class="setting-card-title" style="display: flex; justify-content: space-between; align-items: center;">
+                <span>📊 同步状态与直链缓存监控</span>
+                <button class="btn-outline btn-sm" onclick="clearStrmUrlCache()">🧹 清空直链缓存 (<span id="strmCacheCountText">0</span>)</button>
+              </div>
+
+              <!-- Stats Grid -->
+              <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;">
+                <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px; text-align: center;">
+                  <div style="font-size: 18px; font-weight: 700; color: var(--brand);" id="statStrmCreated">0</div>
+                  <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">生成/更新 STRM</div>
+                </div>
+                <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px; text-align: center;">
+                  <div style="font-size: 18px; font-weight: 700; color: var(--text-main);" id="statStrmSkipped">0</div>
+                  <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">跳过未变更</div>
+                </div>
+                <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px; text-align: center;">
+                  <div style="font-size: 18px; font-weight: 700; color: #22c55e;" id="statStrmSubs">0</div>
+                  <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">同步字幕/元数据</div>
+                </div>
+                <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px; text-align: center;">
+                  <div style="font-size: 18px; font-weight: 700; color: #3b82f6;" id="statStrmScanned">0</div>
+                  <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">扫描目录数</div>
+                </div>
+              </div>
+
+              <!-- Current Activity Box -->
+              <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 12px; line-height: 1.6;">
+                <div style="display: flex; justify-content: space-between; color: var(--text-secondary);">
+                  <span id="strmCurrentActionText">当前无运行中的同步任务</span>
+                  <span id="strmTotalHitsText" style="color: var(--brand); font-weight: 600;">302 缓存命中: 0 次</span>
+                </div>
+                <div id="strmCurrentFileText" style="color: var(--text-muted); font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px;">
+                  点击右上角「立即同步 STRM 影视库」或在文件列表中对任意文件夹点击「🎬 STRM」即可生成。
+                </div>
+              </div>
+
+              <!-- Subtabs: Recent STRM Files vs Execution Logs -->
+              <div class="subtabs" style="padding: 0; border-bottom: 1px solid var(--border-subtle); padding-bottom: 8px;">
+                <div class="subtabs-left">
+                  <button class="subtab-btn active" id="tabStrmRecentBtn" onclick="switchStrmPanelTab('recent')">最近生成的 .strm (<span id="countStrmRecent">0</span>)</button>
+                  <button class="subtab-btn" id="tabStrmLogsBtn" onclick="switchStrmPanelTab('logs')">执行日志</button>
+                </div>
+              </div>
+
+              <!-- Panel 1: Recent STRM Files -->
+              <div id="strmRecentListContainer" style="max-height: 290px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;">
+                <div style="text-align: center; color: var(--text-muted); padding: 36px 12px; font-size: 12.5px;">
+                  尚未生成 STRM 记录，点击「⚡ 立即同步 STRM 影视库」开始构建海报墙音源。
+                </div>
+              </div>
+
+              <!-- Panel 2: Execution Logs -->
+              <div id="strmLogsContainer" style="display: none; max-height: 290px; overflow-y: auto; background: #141414; color: #d1d5db; font-family: monospace; font-size: 11.5px; line-height: 1.6; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
+                暂无日志
+              </div>
+            </div>
+
           </div>
         </div>
       </div>
@@ -1934,17 +2970,37 @@ HTML_PAGE = """<!DOCTYPE html>
       <div class="content-view" id="view-settings">
         <div class="official-card">
           <div class="settings-grid">
-            <!-- Setting 1: Storage Dir -->
+            <!-- Setting 1: Storage Dir & Concurrency -->
             <div class="setting-card">
-              <div class="setting-card-title">📁 NAS 落地下载目录</div>
-              <div class="setting-card-desc">指定光鸭网盘文件下载至飞牛 NAS 的本地共享文件夹路径（穿透所有存储卷）。</div>
+              <div class="setting-card-title">📁 NAS 落地下载目录与并发控制</div>
+              <div class="setting-card-desc">指定光鸭网盘文件下载至飞牛 NAS 的本地共享文件夹路径，并设置最大同时下载个数。</div>
               <div style="display: flex; gap: 8px; margin-top: 4px;">
                 <input type="text" class="form-input" id="settingDownloadDirInput" style="flex: 1;" placeholder="/vol1/1000/下载/光鸭网盘">
                 <button class="btn-secondary" onclick="openFolderPicker(onSettingFolderPicked, document.getElementById('settingDownloadDirInput').value)">浏览...</button>
               </div>
+              <div style="margin-top: 8px; padding: 10px 12px; background: var(--bg-input); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                <div>
+                  <div style="font-size: 13px; font-weight: 600; color: var(--text-main);">⚡ 最大同时下载个数限制</div>
+                  <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px;">超出数量的任务自动排队，前序完成后自动接力（可手动输入 1 ~ 16）</div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+                  <input type="number" class="form-input" id="settingMaxConcurrentInput" min="1" max="16" value="3" style="width: 68px; height: 34px; text-align: center; font-weight: 700; color: var(--brand); padding: 0 6px;">
+                  <span style="font-size: 12.5px; color: var(--text-secondary);">个</span>
+                </div>
+              </div>
+              <div style="margin-top: 8px; padding: 10px 12px; background: var(--bg-input); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                <div>
+                  <div style="font-size: 13px; font-weight: 600; color: var(--text-main);">📄 文件列表每页显示数量</div>
+                  <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px;">可设为 10、20、50、100 或任意自定义条数（输入 0 代表单页全部显示）</div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+                  <input type="number" class="form-input" id="settingFilePageSizeInput" min="0" max="5000" value="20" style="width: 68px; height: 34px; text-align: center; font-weight: 700; color: var(--brand); padding: 0 6px;">
+                  <span style="font-size: 12.5px; color: var(--text-secondary);">条/页</span>
+                </div>
+              </div>
               <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
                 <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); cursor: pointer;">
-                  <input type="checkbox" id="setAsDefaultDirCheckbox" checked> 同时设为默认保存路径
+                  <input type="checkbox" id="settingSetDefaultCheckbox" checked> 同时设为默认保存路径
                 </label>
                 <button class="btn-primary btn-sm" onclick="saveDownloadDirSetting()">保存配置</button>
               </div>
@@ -1962,9 +3018,18 @@ HTML_PAGE = """<!DOCTYPE html>
 
             <!-- Setting 3: About & Update Check -->
             <div class="setting-card">
-              <div class="setting-card-title">ℹ️ 关于与更新检查</div>
+              <div class="setting-card-title">ℹ️ 应用介绍与更新检查</div>
               <div class="setting-card-desc">
-                当前运行版本: <strong id="aboutCurrentVersion" style="color: var(--brand);">v1.1.1</strong> · 由 <strong>chaos</strong> 专为飞牛 fnOS 深度适配打造。
+                当前运行版本: <strong id="aboutCurrentVersion" style="color: var(--brand);">v1.2.1</strong> · 由 <strong>chaos</strong> 专为飞牛 fnOS 深度适配打造。
+              </div>
+              <div style="background: var(--bg-input); padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); font-size: 12px; margin-bottom: 4px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; gap: 8px; flex-wrap: wrap;">
+                  <span style="font-weight: 600; color: var(--text-main);">🌐 网页独立访问地址 (默认端口: <code style="color: var(--brand); font-weight: 700;">8998</code>):</span>
+                  <a id="aboutWebAccessLink" href="http://127.0.0.1:8998" target="_blank" style="color: var(--brand); font-family: monospace; font-weight: 600; text-decoration: underline;">http://&lt;NAS_IP&gt;:8998</a>
+                </div>
+                <div style="color: var(--text-muted); font-size: 11px; line-height: 1.5;">
+                  除在飞牛桌面点击图标以微应用窗口打开外，您也可以在任意局域网浏览器直接输入 <code id="aboutWebAccessCode">http://&lt;NAS_IP&gt;:8998</code> 独立全屏访问。
+                </div>
               </div>
               <div style="background: var(--bg-input); padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); font-size: 12px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
@@ -1992,16 +3057,19 @@ HTML_PAGE = """<!DOCTYPE html>
       <div class="modal-header">
         <div class="modal-title">
           <span style="font-size: 18px;">⬇️</span>
-          <span>下载文件到 NAS</span>
+          <span id="dlConfirmModalTitle">下载文件到 NAS</span>
         </div>
         <button class="close-btn" onclick="closeModal('downloadConfirmModal')">&times;</button>
       </div>
-      <div class="modal-body" style="padding: 20px 24px; gap: 16px;">
+      <div class="modal-body" style="padding: 20px 24px; gap: 14px;">
         <div>
-          <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px; font-weight: 500;">下载文件：</div>
-          <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 10px;">
-            <span style="font-size: 20px; flex-shrink: 0;">📦</span>
-            <div style="font-weight: 500; font-size: 13px; line-height: 1.5; color: var(--text-main); word-break: break-all; flex: 1;" id="dlConfirmFileName">--</div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px; font-weight: 500;" id="dlConfirmTargetLabel">下载目标：</div>
+          <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span style="font-size: 20px; flex-shrink: 0;" id="dlConfirmItemIcon">📦</span>
+              <div style="font-weight: 600; font-size: 13px; line-height: 1.5; color: var(--text-main); word-break: break-all; flex: 1;" id="dlConfirmFileName">--</div>
+            </div>
+            <div id="dlConfirmBatchList" style="display: none; max-height: 135px; overflow-y: auto; border-top: 1px solid var(--border-subtle); padding-top: 8px; font-size: 12px; color: var(--text-secondary); flex-direction: column; gap: 4px;"></div>
           </div>
         </div>
 
@@ -2012,19 +3080,92 @@ HTML_PAGE = """<!DOCTYPE html>
             <button class="btn-secondary" onclick="openFolderPicker(onDlConfirmFolderPicked)" style="height: 38px; padding: 0 16px; font-size: 13px; flex-shrink: 0;">📂 浏览目录</button>
           </div>
           <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px; line-height: 1.5;">
-            💡 提示：可自由下载至 NAS 任意存储卷或共享文件夹（如 影视、下载、照片等）。
+            💡 提示：可自由下载至 NAS 任意存储卷或共享文件夹（选择文件夹下载时将自动保持内部子目录结构）。
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+          <div id="dlConfirmConflictBox" style="display: none; flex-direction: column; gap: 5px; padding: 10px 12px; background: var(--bg-subtle); border-radius: 8px; border: 1px solid var(--border-subtle);">
+            <label style="font-size: 12px; color: var(--text-secondary); font-weight: 600;">同名文件处理策略：</label>
+            <select id="dlConfirmConflictSelect" class="form-input" style="height: 32px; font-size: 12.5px; padding: 0 8px;">
+              <option value="skip">跳过已存在同名文件 (推荐)</option>
+              <option value="overwrite">覆盖原文件</option>
+              <option value="rename">自动重命名保留两份</option>
+            </select>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 5px; padding: 10px 12px; background: var(--bg-subtle); border-radius: 8px; border: 1px solid var(--border-subtle); grid-column: span 2;" id="dlConfirmConcurrencyBox">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <div>
+                <div style="font-size: 12.5px; color: var(--text-main); font-weight: 600;">⚡ 同时下载任务上限</div>
+                <div style="font-size: 11px; color: var(--text-muted);">超出限制的任务将自动排队依次下载</div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <input type="number" id="dlConfirmMaxConcurrentInput" min="1" max="16" value="3" class="form-input" style="width: 64px; height: 32px; text-align: center; font-weight: 700; color: var(--brand); padding: 0 6px;">
+                <span style="font-size: 12px; color: var(--text-secondary);">个</span>
+              </div>
+            </div>
           </div>
         </div>
 
         <div style="display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: var(--bg-subtle); border-radius: 8px; border: 1px solid var(--border-subtle);">
-          <input type="checkbox" id="setAsDefaultDirCheckbox" style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--brand);">
-          <label for="setAsDefaultDirCheckbox" style="font-size: 12.5px; color: var(--text-main); cursor: pointer; user-select: none;">将该目录设为以后的默认下载路径</label>
+          <input type="checkbox" id="dlConfirmSetDefaultCb" style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--brand);">
+          <label for="dlConfirmSetDefaultCb" style="font-size: 12.5px; color: var(--text-main); cursor: pointer; user-select: none;">将该目录设为以后的默认下载路径</label>
         </div>
       </div>
 
       <div class="modal-footer" style="padding: 14px 24px;">
         <button class="btn-secondary" onclick="closeModal('downloadConfirmModal')">取消</button>
-        <button class="btn-primary" onclick="confirmStartDownload()">立即下载到 NAS</button>
+        <button class="btn-primary" id="dlConfirmSubmitBtn" onclick="confirmStartDownload()">立即下载到 NAS</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Quick STRM Generator (一键生成目录/单文件 STRM) -->
+  <div class="modal-backdrop" id="quickStrmModal">
+    <div class="modal" style="width: 620px; max-width: 95vw;">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span style="font-size: 18px;">🎬</span>
+          <span>一键生成 STRM 流媒体映射</span>
+        </div>
+        <button class="close-btn" onclick="closeModal('quickStrmModal')">&times;</button>
+      </div>
+      <div class="modal-body" style="padding: 20px 24px; gap: 16px;">
+        <div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px; font-weight: 500;">网盘源目标：</div>
+          <div style="background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 10px;">
+            <span style="font-size: 20px; flex-shrink: 0;" id="quickStrmItemIcon">📁</span>
+            <div style="font-weight: 600; font-size: 13.5px; line-height: 1.5; color: var(--text-main); word-break: break-all; flex: 1;" id="quickStrmItemName">--</div>
+          </div>
+        </div>
+
+        <div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px; font-weight: 500;">NAS 本地 STRM 输出目录：</div>
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="quickStrmOutputDirInput" style="flex: 1; height: 38px; font-size: 13px; font-family: monospace; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 12px; color: var(--text-main);">
+            <button class="btn-secondary" onclick="openFolderPicker(onQuickStrmFolderPicked, document.getElementById('quickStrmOutputDirInput').value)" style="height: 38px; padding: 0 16px; font-size: 13px; flex-shrink: 0;">📂 浏览目录</button>
+          </div>
+          <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px; line-height: 1.5;">
+            💡 生成的 <code>.strm</code> 文件可直接被 <b>飞牛影视 / Emby / Jellyfin / Infuse</b> 识别刮削并 302 极速直连播放。
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 8px; padding: 10px 14px; background: var(--bg-subtle); border-radius: 8px; border: 1px solid var(--border-subtle);">
+          <label id="quickStrmKeepFolderRow" style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-main); cursor: pointer;">
+            <input type="checkbox" id="quickStrmKeepFolderCb" checked style="width: 15px; height: 15px; accent-color: var(--brand);">
+            <span>在输出目录下创建同名子文件夹（保持目录层级整洁）</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-main); cursor: pointer;">
+            <input type="checkbox" id="quickStrmDlSubsCb" checked style="width: 15px; height: 15px; accent-color: var(--brand);">
+            <span>同时下载同目录下的外挂字幕文件 (<code>.srt / .ass / .vtt</code>)</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="modal-footer" style="padding: 14px 24px;">
+        <button class="btn-secondary" onclick="closeModal('quickStrmModal')">取消</button>
+        <button class="btn-primary" onclick="confirmQuickStrmGenerate()">⚡ 立即生成 STRM</button>
       </div>
     </div>
   </div>
@@ -2256,6 +3397,38 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- Modal: Delete Local Transfer Task Confirmation (删除本地下载任务) -->
+  <div class="modal-backdrop" id="deleteTransferModal" style="z-index: 1060;">
+    <div class="modal" style="width: 460px; max-width: 95vw; border-radius: 14px; padding: 22px;">
+      <div class="modal-header" style="border-bottom: 1px solid var(--border-subtle); padding-bottom: 12px; margin-bottom: 14px;">
+        <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; color: #ef4444;">
+          <span>🗑️</span>
+          <span id="deleteTransferModalTitle">删除下载任务</span>
+        </div>
+        <button class="close-btn" onclick="closeModal('deleteTransferModal')">&times;</button>
+      </div>
+      <div>
+        <div style="font-size: 14px; color: var(--text); margin-bottom: 8px; word-break: break-all;">
+          <span id="deleteTransferPromptLabel">确定要删除以下下载任务吗？</span><br>
+          <strong id="deleteTransferTaskName" style="color: var(--text); display: inline-block; margin-top: 6px;">--</strong>
+        </div>
+        <div id="deleteTransferPathWrap" style="font-size: 12px; color: var(--text-muted); word-break: break-all; margin-bottom: 12px; padding: 6px 10px; background: var(--bg-input); border-radius: 6px; font-family: monospace;">
+          NAS 路径: <span id="deleteTransferFilePath">--</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; margin: 14px 0; padding: 10px 12px; background: var(--bg-subtle); border-radius: 8px; border: 1px solid var(--border);">
+          <input type="checkbox" id="deleteTransferFileCheckbox" style="cursor: pointer; width: 16px; height: 16px; accent-color: #ef4444;">
+          <label for="deleteTransferFileCheckbox" style="font-size: 13px; color: var(--text); cursor: pointer; user-select: none; font-weight: 500;">
+            同时删除 NAS 硬盘上的对应文件（含未完成临时分片）
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+        <button class="btn-secondary" onclick="closeModal('deleteTransferModal')">取消</button>
+        <button class="btn-danger" id="confirmDeleteTransferBtn" onclick="confirmDeleteTransfer()" style="padding: 7px 18px; border-radius: 8px; background: #ef4444; color: white; border: none; font-weight: 600; cursor: pointer;">确定删除</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal: Duplicate File Warning (NAS 本地文件已存在提示) -->
   <div class="modal-backdrop" id="duplicateFileModal" style="z-index: 1060;">
     <div class="modal" style="width: 480px; max-width: 95vw; border-radius: 14px; padding: 22px;">
@@ -2371,8 +3544,8 @@ HTML_PAGE = """<!DOCTYPE html>
           在手机端点击【确认登录】即可自动完成授权
         </div>
 
-        <div style="margin-top: 16px; width: 100%; display: flex; justify-content: center;">
-          <button class="btn-primary" style="width: 100%; justify-content: center; padding: 9px 16px;" onclick="refreshDeviceCode()">🔄 刷新二维码</button>
+        <div style="margin-top: 16px; display: flex; justify-content: center;">
+          <button class="btn-primary" style="width: 160px; justify-content: center; padding: 8px 20px;" onclick="refreshDeviceCode()">🔄 刷新二维码</button>
         </div>
       </div>
 
@@ -2419,6 +3592,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
     function switchCategory(cat) {
       activeCategory = cat;
+      currentFilePage = 1;
       document.querySelectorAll('.cat-tab-item').forEach(el => {
         el.classList.toggle('active', el.dataset.cat === cat);
       });
@@ -2427,6 +3601,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
     function handleSearch(val) {
       searchQuery = (val || '').trim().toLowerCase();
+      currentFilePage = 1;
       renderFileList();
     }
 
@@ -2437,8 +3612,249 @@ HTML_PAGE = """<!DOCTYPE html>
       renderFileList();
     }
 
+    let selectedFileIds = new Set();
+    let currentFilteredFiles = [];
+    let currentPageFiles = [];
+    let filePageSize = 20;
+    let currentFilePage = 1;
+    let maxConcurrentDownloads = 3;
+
+    function getTotalFilePages() {
+      if (!filePageSize || filePageSize <= 0) return 1;
+      return Math.max(1, Math.ceil(currentFilteredFiles.length / filePageSize));
+    }
+
+    function syncFilePageSizeInputs(val) {
+      let n = parseInt(val, 10);
+      if (isNaN(n) || n < 0) n = 20;
+      if (n > 5000) n = 5000;
+      filePageSize = n;
+
+      const sel = document.getElementById("filePageSizeSelect");
+      const customInp = document.getElementById("filePageSizeCustomInput");
+      const settingInp = document.getElementById("settingFilePageSizeInput");
+      const presets = ["10", "20", "50", "100", "200", "0"];
+
+      if (sel) {
+        sel.value = presets.includes(String(n)) ? String(n) : "custom";
+      }
+      if (customInp) customInp.value = n;
+      if (settingInp) settingInp.value = n;
+    }
+
+    function onFilePageSizeSelectChange(val) {
+      if (val === "custom") {
+        const customInp = document.getElementById("filePageSizeCustomInput");
+        if (customInp) {
+          customInp.focus();
+          customInp.select();
+        }
+        return;
+      }
+      setFilePageSize(val);
+    }
+
+    async function setFilePageSize(val) {
+      let n = parseInt(val, 10);
+      if (isNaN(n) || n < 0) n = 20;
+      if (n > 5000) n = 5000;
+      syncFilePageSizeInputs(n);
+      currentFilePage = 1;
+      renderFileList();
+      try {
+        await fetch("/api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ file_page_size: n })
+        });
+        showToast(n === 0 ? "已设为单页全部显示" : `已设置每页显示 ${n} 项`);
+      } catch (e) {
+        console.warn("Save file_page_size failed:", e);
+      }
+    }
+
+    function goToFilePage(page) {
+      const totalPages = getTotalFilePages();
+      let p = parseInt(page, 10);
+      if (isNaN(p)) p = 1;
+      p = Math.max(1, Math.min(totalPages, p));
+      if (p === currentFilePage && document.getElementById("filePageJumpInput")) {
+        document.getElementById("filePageJumpInput").value = p;
+      }
+      currentFilePage = p;
+      renderFileList();
+      const tc = document.getElementById("fileTableContainer");
+      const gc = document.getElementById("fileGridContainer");
+      if (tc) tc.scrollTop = 0;
+      if (gc) gc.scrollTop = 0;
+    }
+
+    function changeFilePage(delta) {
+      goToFilePage(currentFilePage + delta);
+    }
+
+    function renderFilePaginationBar() {
+      const totalItems = currentFilteredFiles.length;
+      const totalPages = getTotalFilePages();
+      if (currentFilePage > totalPages) currentFilePage = totalPages;
+      if (currentFilePage < 1) currentFilePage = 1;
+
+      const infoEl = document.getElementById("filePaginationInfo");
+      const totalPagesEl = document.getElementById("fileTotalPagesText");
+      const jumpInput = document.getElementById("filePageJumpInput");
+      const btnFirst = document.getElementById("btnFirstPage");
+      const btnPrev = document.getElementById("btnPrevPage");
+      const btnNext = document.getElementById("btnNextPage");
+      const btnLast = document.getElementById("btnLastPage");
+      const numContainer = document.getElementById("filePageNumbersContainer");
+
+      if (infoEl) {
+        if (totalItems === 0) {
+          infoEl.innerText = "共 0 项";
+        } else if (!filePageSize || filePageSize <= 0) {
+          infoEl.innerText = `共 ${totalItems} 项 (全部显示)`;
+        } else {
+          const startIdx = (currentFilePage - 1) * filePageSize + 1;
+          const endIdx = Math.min(totalItems, currentFilePage * filePageSize);
+          infoEl.innerText = `显示第 ${startIdx} - ${endIdx} 项 / 共 ${totalItems} 项`;
+        }
+      }
+
+      if (totalPagesEl) totalPagesEl.innerText = totalPages;
+      if (jumpInput) {
+        jumpInput.max = totalPages;
+        jumpInput.value = currentFilePage;
+      }
+      if (btnFirst) btnFirst.disabled = (currentFilePage <= 1);
+      if (btnPrev) btnPrev.disabled = (currentFilePage <= 1);
+      if (btnNext) btnNext.disabled = (currentFilePage >= totalPages);
+      if (btnLast) btnLast.disabled = (currentFilePage >= totalPages);
+
+      if (numContainer) {
+        numContainer.innerHTML = "";
+        const maxButtons = 5;
+        let startPage = Math.max(1, currentFilePage - 2);
+        let endPage = Math.min(totalPages, startPage + maxButtons - 1);
+        if (endPage - startPage + 1 < maxButtons) {
+          startPage = Math.max(1, endPage - maxButtons + 1);
+        }
+
+        for (let p = startPage; p <= endPage; p++) {
+          const btn = document.createElement("button");
+          btn.className = "page-btn" + (p === currentFilePage ? " active" : "");
+          btn.innerText = p;
+          btn.onclick = () => goToFilePage(p);
+          numContainer.appendChild(btn);
+        }
+      }
+    }
+
     function toggleSelectAllTableFiles(checked) {
-      document.querySelectorAll('.table-file-cb').forEach(cb => cb.checked = checked);
+      const targetList = currentPageFiles.length > 0 ? currentPageFiles : currentFilteredFiles;
+      if (checked) {
+        targetList.forEach(item => {
+          if (item && item.fileId) selectedFileIds.add(item.fileId);
+        });
+      } else {
+        targetList.forEach(item => {
+          if (item && item.fileId) selectedFileIds.delete(item.fileId);
+        });
+      }
+      document.querySelectorAll('.table-file-cb').forEach(cb => {
+        cb.checked = selectedFileIds.has(cb.dataset.fileid);
+      });
+      renderFileList();
+    }
+
+    function selectAllFilteredFiles() {
+      currentFilteredFiles.forEach(item => {
+        if (item && item.fileId) selectedFileIds.add(item.fileId);
+      });
+      renderFileList();
+    }
+
+    function onFileCheckboxChange(fileId, checked) {
+      if (checked) {
+        selectedFileIds.add(fileId);
+      } else {
+        selectedFileIds.delete(fileId);
+      }
+      updateBatchSelectionUI();
+    }
+
+    function updateBatchSelectionUI() {
+      const pageIds = currentPageFiles.map(f => f.fileId).filter(Boolean);
+      const allPageSelected = pageIds.length > 0 && pageIds.every(id => selectedFileIds.has(id));
+      const selectAllCb = document.getElementById("tableSelectAllCb");
+      if (selectAllCb) {
+        selectAllCb.checked = allPageSelected;
+        selectAllCb.indeterminate = !allPageSelected && pageIds.some(id => selectedFileIds.has(id));
+      }
+
+      const selectedCount = selectedFileIds.size;
+      const batchDlBtn = document.getElementById("batchDownloadBtn");
+      const batchDlText = document.getElementById("batchDownloadBtnText");
+      const batchDlIcon = document.getElementById("batchDownloadBtnIcon");
+      const batchDelBtn = document.getElementById("batchDeleteBtn");
+      const batchDelCount = document.getElementById("batchDeleteCountText");
+
+      if (batchDlBtn && batchDlText) {
+        if (selectedCount > 0) {
+          batchDlBtn.className = "btn-primary";
+          batchDlText.innerText = `批量下载 (${selectedCount})`;
+          if (batchDlIcon) batchDlIcon.style.color = "currentColor";
+        } else {
+          batchDlBtn.className = "btn-secondary";
+          batchDlText.innerText = "批量下载";
+          if (batchDlIcon) batchDlIcon.style.color = "var(--brand)";
+        }
+      }
+
+      if (batchDelBtn && batchDelCount) {
+        if (selectedCount > 0) {
+          batchDelBtn.style.display = "inline-flex";
+          batchDelCount.innerText = selectedCount;
+        } else {
+          batchDelBtn.style.display = "none";
+        }
+      }
+
+      updateBreadcrumbStats();
+    }
+
+    function updateBreadcrumbStats() {
+      const statsEl = document.getElementById("fileListStatsText");
+      if (!statsEl) return;
+      const totalRaw = currentRawFiles.length;
+      const visibleCount = currentFilteredFiles.length;
+      const pageCount = currentPageFiles.length;
+      const selCount = selectedFileIds.size;
+
+      let html = "";
+      if (selCount > 0) {
+        html += `<span style="color: var(--brand); font-weight: 600;">已选 ${selCount} 项</span>`;
+        if (selCount < visibleCount) {
+          html += ` <span style="margin: 0 6px; color: var(--border);">|</span> `;
+          html += `<a href="javascript:void(0)" onclick="selectAllFilteredFiles()" style="color: var(--brand); text-decoration: none; font-weight: 500;">全选全部 (${visibleCount}项)</a>`;
+        }
+        html += ` <span style="margin: 0 6px; color: var(--border);">|</span> `;
+        html += `<a href="javascript:void(0)" onclick="selectedFileIds.clear(); renderFileList();" style="color: var(--text-secondary); text-decoration: none;">取消选择</a>`;
+        html += ` <span style="margin: 0 6px; color: var(--border);">|</span> `;
+      } else if (visibleCount > 0) {
+        html += `<a href="javascript:void(0)" onclick="toggleSelectAllTableFiles(true)" style="color: var(--brand); text-decoration: none; font-weight: 500;">全选本页 (${pageCount}项)</a>`;
+        if (visibleCount > pageCount) {
+          html += ` <span style="margin: 0 6px; color: var(--border);">|</span> `;
+          html += `<a href="javascript:void(0)" onclick="selectAllFilteredFiles()" style="color: var(--brand); text-decoration: none; font-weight: 500;">全选全部 (${visibleCount}项)</a>`;
+        }
+        html += ` <span style="margin: 0 6px; color: var(--border);">|</span> `;
+      }
+
+      if (visibleCount !== totalRaw) {
+        html += `筛选 ${visibleCount} / 共 ${totalRaw} 项`;
+      } else {
+        html += `共 ${totalRaw} 项`;
+      }
+      statsEl.innerHTML = html;
     }
 
 
@@ -2457,6 +3873,7 @@ HTML_PAGE = """<!DOCTYPE html>
     // Download modal state
     let pendingDownloadFileId = "";
     let pendingDownloadFileName = "";
+    let pendingDownloadItems = []; // [{fileId, fileName, resType, fileSize}]
 
     // Folder Picker state
     let folderPickerCallback = null;
@@ -2504,6 +3921,11 @@ HTML_PAGE = """<!DOCTYPE html>
         document.getElementById("view-offline")?.classList.add("active");
         document.getElementById("breadcrumbs").innerHTML = `<span class="crumb-item current">⚡ 云端离线下载 (磁力/BT)</span>`;
         loadCloudTasks();
+      } else if (viewName === 'strm') {
+        document.getElementById("navStrm")?.classList.add("active");
+        document.getElementById("view-strm")?.classList.add("active");
+        document.getElementById("breadcrumbs").innerHTML = `<span class="crumb-item current">🎬 STRM 影视库 &amp; 302 动态串流网关</span>`;
+        loadStrmView(true);
       } else if (viewName === 'trash') {
         document.getElementById("navTrash")?.classList.add("active");
         document.getElementById("view-trash")?.classList.add("active");
@@ -2520,6 +3942,7 @@ HTML_PAGE = """<!DOCTYPE html>
       if (currentView === 'files') loadFiles(currentParentId);
       else if (currentView === 'transfers') loadTransfers();
       else if (currentView === 'offline') loadCloudTasks();
+      else if (currentView === 'strm') loadStrmView(true);
       else if (currentView === 'trash') switchView('trash');
       else if (currentView === 'settings') loadSettings();
     }
@@ -2553,6 +3976,21 @@ HTML_PAGE = """<!DOCTYPE html>
         filtered = filtered.filter(f => (f.fileName || '').toLowerCase().includes(searchQuery));
       }
 
+      currentFilteredFiles = filtered;
+      const totalPages = getTotalFilePages();
+      if (currentFilePage > totalPages) currentFilePage = totalPages;
+      if (currentFilePage < 1) currentFilePage = 1;
+
+      if (!filePageSize || filePageSize <= 0) {
+        currentPageFiles = filtered;
+      } else {
+        const startIdx = (currentFilePage - 1) * filePageSize;
+        currentPageFiles = filtered.slice(startIdx, startIdx + filePageSize);
+      }
+
+      renderFilePaginationBar();
+      updateBatchSelectionUI();
+
       if (filtered.length === 0) {
         const emptyHtml = `
           <tr>
@@ -2575,19 +4013,22 @@ HTML_PAGE = """<!DOCTYPE html>
         if (grid) {
           grid.style.display = 'grid';
           grid.innerHTML = '';
-          filtered.forEach(item => {
+          currentPageFiles.forEach(item => {
             const isDir = (item.resType === 2);
-            const isVid = isVideoFile(item.fileName);
+            const isChecked = selectedFileIds.has(item.fileId);
             const icon = isDir ? "📁" : getFileIcon(item.fileName);
             const card = document.createElement('div');
-            card.style.cssText = 'background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; text-align: center; transition: all 0.2s; position: relative;';
+            card.style.cssText = `background: ${isChecked ? 'var(--bg-active)' : 'var(--bg-card)'}; border: 1px solid ${isChecked ? 'var(--brand)' : 'var(--border)'}; border-radius: var(--radius-md); padding: 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; text-align: center; transition: all 0.2s; position: relative;`;
             card.onmouseenter = () => card.style.borderColor = 'var(--brand)';
-            card.onmouseleave = () => card.style.borderColor = 'var(--border)';
+            card.onmouseleave = () => card.style.borderColor = selectedFileIds.has(item.fileId) ? 'var(--brand)' : 'var(--border)';
             card.onclick = () => {
               if (isDir) navigateTo(item.fileId, item.fileName);
-              else promptStartDownload(item.fileId, item.fileName);
+              else promptStartDownload(item.fileId, item.fileName, 1, item.fileSize || 0);
             };
             card.innerHTML = `
+              <input type="checkbox" class="table-file-cb" data-fileid="${item.fileId}" ${isChecked ? 'checked' : ''}
+                style="position: absolute; top: 10px; left: 10px; width: 16px; height: 16px; accent-color: var(--brand); cursor: pointer;"
+                onclick="event.stopPropagation();" onchange="onFileCheckboxChange('${item.fileId}', this.checked); renderFileList();">
               <div style="font-size: 38px; margin-bottom: 8px;">${icon}</div>
               <div style="font-size: 12px; font-weight: 500; color: var(--text-main); width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(item.fileName)}">${escapeHtml(item.fileName)}</div>
               <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">${isDir ? '文件夹' : formatBytes(item.fileSize)}</div>
@@ -2603,24 +4044,34 @@ HTML_PAGE = """<!DOCTYPE html>
       if (grid) grid.style.display = 'none';
 
       tbody.innerHTML = "";
-      filtered.forEach(item => {
+      currentPageFiles.forEach(item => {
         const tr = document.createElement("tr");
         const isDir = (item.resType === 2);
+        const isChecked = selectedFileIds.has(item.fileId);
         const icon = isDir ? "📁" : getFileIcon(item.fileName);
+        if (isChecked) {
+          tr.style.background = "var(--bg-active)";
+        }
 
         tr.innerHTML = `
-          <td><input type="checkbox" class="table-file-cb" data-fileid="${item.fileId}"></td>
+          <td onclick="if(event.target.tagName!=='INPUT'){const cb=this.querySelector('input');cb.checked=!cb.checked;cb.dispatchEvent(new Event('change'));}" style="cursor: pointer;">
+            <input type="checkbox" class="table-file-cb" data-fileid="${item.fileId}" ${isChecked ? 'checked' : ''}
+              style="width: 15px; height: 15px; accent-color: var(--brand); cursor: pointer;"
+              onchange="onFileCheckboxChange('${item.fileId}', this.checked); this.closest('tr').style.background = this.checked ? 'var(--bg-active)' : '';">
+          </td>
           <td>
-            <div class="file-name-cell" onclick="${isDir ? `navigateTo('${item.fileId}', '${escapeHtml(item.fileName)}')` : `promptStartDownload('${item.fileId}', '${escapeHtml(item.fileName)}')`}">
+            <div class="file-name-cell" onclick="${isDir ? `navigateTo('${item.fileId}', '${escapeHtml(item.fileName)}')` : `promptStartDownload('${item.fileId}', '${escapeHtml(item.fileName)}', 1, ${item.fileSize || 0})`}">
               <span class="file-icon">${icon}</span>
               <span class="file-name-text" title="${escapeHtml(item.fileName)}">${escapeHtml(item.fileName)}</span>
             </div>
           </td>
           <td>${isDir ? '--' : formatBytes(item.fileSize)}</td>
           <td>${formatDate(item.utime || item.ctime)}</td>
-          <td style="text-align: right; width: 220px; white-space: nowrap;">
+          <td style="text-align: right; width: 300px; white-space: nowrap;">
             <div class="actions-cell">
-              ${!isDir ? `<button class="btn-primary btn-sm" onclick="promptStartDownload('${item.fileId}', '${escapeHtml(item.fileName)}')">⬇️<span class="desktop-text"> 下载到NAS</span><span class="mobile-text"> 下载</span></button>` : ''}
+              ${isDir ? `<button class="btn-secondary btn-sm" onclick="openQuickStrmModal('${item.fileId}', '${escapeHtml(item.fileName)}', true)" title="将该文件夹递归生成为本地 STRM 影视库">🎬 STRM</button>` : ''}
+              ${!isDir && isVideoFile(item.fileName) ? `<button class="btn-secondary btn-sm desktop-only-btn" onclick="openQuickStrmModal('${item.fileId}', '${escapeHtml(item.fileName)}', false)" title="生成该视频的 .strm 流媒体文件">🎬 STRM</button>` : ''}
+              <button class="btn-primary btn-sm" onclick="promptStartDownload('${item.fileId}', '${escapeHtml(item.fileName)}', ${isDir ? 2 : 1}, ${item.fileSize || 0})">⬇️<span class="desktop-text"> 下载到NAS</span><span class="mobile-text"> 下载</span></button>
               ${!isDir ? `<button class="btn-secondary btn-sm desktop-only-btn" onclick="copyLink('${item.fileId}')">🔗 直链</button>` : ''}
               <button class="btn-danger btn-sm" onclick="deleteFile('${item.fileId}', '${escapeHtml(item.fileName)}')">🗑️</button>
             </div>
@@ -2632,6 +4083,8 @@ HTML_PAGE = """<!DOCTYPE html>
 
     async function loadFiles(parentId = currentParentId) {
       currentParentId = parentId;
+      currentFilePage = 1;
+      selectedFileIds.clear();
       const tbody = document.getElementById("fileTableBody");
       tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 50px;">正在加载目录文件...</td></tr>`;
 
@@ -2639,6 +4092,11 @@ HTML_PAGE = """<!DOCTYPE html>
         const res = await fetch(`/api/files?parentId=${encodeURIComponent(parentId)}`);
         const json = await res.json();
         if (json.code === 401 || (!isLoggedIn && (!json.list || json.list.length === 0))) {
+          currentRawFiles = [];
+          currentFilteredFiles = [];
+          currentPageFiles = [];
+          renderFilePaginationBar();
+          updateBatchSelectionUI();
           tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; padding: 50px;"><div style="font-size: 15px; font-weight: 600; margin-bottom: 8px;">⚠️ 当前未登录光鸭网盘账号</div><div style="color: var(--text-muted); font-size: 13px; margin-bottom: 16px;">登录后即可查看网盘文件并开始疾速上传下载</div><button class="btn-primary" onclick="openLoginModal()">📱 立即扫码登录</button></td></tr>`;
           return;
         }
@@ -2669,6 +4127,9 @@ function escapeHtml(str) {
     function updateBreadcrumbs() {
       const c = document.getElementById("breadcrumbs");
       c.innerHTML = "";
+      const leftWrap = document.createElement("div");
+      leftWrap.style.cssText = "display: flex; align-items: center; gap: 4px; flex-wrap: wrap;";
+
       breadcrumbStack.forEach((b, idx) => {
         const span = document.createElement("span");
         span.innerText = b.name;
@@ -2682,14 +4143,21 @@ function escapeHtml(str) {
             loadFiles(b.id);
           };
         }
-        c.appendChild(span);
+        leftWrap.appendChild(span);
         if (idx < breadcrumbStack.length - 1) {
           const sep = document.createElement("span");
           sep.innerText = " / ";
           sep.className = "crumb-sep";
-          c.appendChild(sep);
+          leftWrap.appendChild(sep);
         }
       });
+
+      const rightStats = document.createElement("span");
+      rightStats.id = "fileListStatsText";
+      rightStats.style.cssText = "margin-left: auto; font-size: 12px; color: var(--text-muted); font-weight: 500; white-space: nowrap;";
+      c.appendChild(leftWrap);
+      c.appendChild(rightStats);
+      updateBreadcrumbStats();
     }
 
     function navigateTo(id, name) {
@@ -2735,10 +4203,36 @@ function escapeHtml(str) {
         if (!res.ok || d.error || (d.code !== undefined && d.code !== 0)) {
           throw new Error(d.error || d.msg || `HTTP ${res.status}`);
         }
+        selectedFileIds.delete(fileId);
         showToast("已成功删除");
         loadFiles();
       } catch (e) {
         alert("删除失败: " + e.message);
+      }
+    }
+
+    async function promptBatchDelete() {
+      const ids = Array.from(selectedFileIds);
+      if (ids.length === 0) {
+        showToast("请先勾选要删除的文件或文件夹");
+        return;
+      }
+      if (!confirm(`确定要批量删除已选中的 ${ids.length} 个项目吗？`)) return;
+      try {
+        const res = await fetch("/api/delete-file", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fileId: ids })
+        });
+        const d = await res.json();
+        if (!res.ok || d.error || (d.code !== undefined && d.code !== 0)) {
+          throw new Error(d.error || d.msg || `HTTP ${res.status}`);
+        }
+        selectedFileIds.clear();
+        showToast(`🗑️ 已成功删除 ${ids.length} 个项目`);
+        loadFiles();
+      } catch (e) {
+        alert("批量删除失败: " + e.message);
       }
     }
 
@@ -2798,13 +4292,101 @@ function escapeHtml(str) {
       }
     }
 
-    // ================= DOWNLOAD CONFIRMATION & NAS FOLDER SELECTION (Issue 2) =================
-    function promptStartDownload(fileId, fileName) {
-      pendingDownloadFileId = fileId;
-      pendingDownloadFileName = fileName;
-      document.getElementById("dlConfirmFileName").innerText = fileName;
+    // ================= DOWNLOAD CONFIRMATION & BATCH / NAS FOLDER SELECTION =================
+    function openDownloadModalWithItems(items) {
+      pendingDownloadItems = items;
+      const isBatchOrFolder = (items.length > 1) || (items.length === 1 && items[0].resType === 2);
+
       document.getElementById("dlConfirmPathInput").value = defaultDownloadDir;
+      document.getElementById("dlConfirmMaxConcurrentInput").value = maxConcurrentDownloads;
+      const conflictBox = document.getElementById("dlConfirmConflictBox");
+      const concurrencyBox = document.getElementById("dlConfirmConcurrencyBox");
+      const batchListEl = document.getElementById("dlConfirmBatchList");
+      const titleEl = document.getElementById("dlConfirmModalTitle");
+      const iconEl = document.getElementById("dlConfirmItemIcon");
+      const nameEl = document.getElementById("dlConfirmFileName");
+      const submitBtn = document.getElementById("dlConfirmSubmitBtn");
+
+      if (isBatchOrFolder) {
+        conflictBox.style.display = "flex";
+        concurrencyBox.style.gridColumn = "span 1";
+      } else {
+        conflictBox.style.display = "none";
+        concurrencyBox.style.gridColumn = "span 2";
+      }
+
+      if (items.length === 1) {
+        const it = items[0];
+        pendingDownloadFileId = it.fileId;
+        pendingDownloadFileName = it.fileName;
+        if (it.resType === 2) {
+          titleEl.innerText = "下载整个文件夹到 NAS";
+          iconEl.innerText = "📁";
+          nameEl.innerText = `${it.fileName} （文件夹 · 将自动递归下载内部所有文件）`;
+          submitBtn.innerText = "立即下载文件夹到 NAS";
+        } else {
+          titleEl.innerText = "下载文件到 NAS";
+          iconEl.innerText = getFileIcon(it.fileName);
+          nameEl.innerText = it.fileSize ? `${it.fileName} (${formatBytes(it.fileSize)})` : it.fileName;
+          submitBtn.innerText = "立即下载到 NAS";
+        }
+        batchListEl.style.display = "none";
+        batchListEl.innerHTML = "";
+      } else {
+        const fileCount = items.filter(i => i.resType !== 2).length;
+        const dirCount = items.filter(i => i.resType === 2).length;
+        const totalBytes = items.reduce((acc, i) => acc + (i.resType !== 2 ? (Number(i.fileSize) || 0) : 0), 0);
+        let summaryParts = [];
+        if (fileCount > 0) summaryParts.push(`${fileCount} 个文件`);
+        if (dirCount > 0) summaryParts.push(`${dirCount} 个文件夹`);
+        const sizeSuffix = totalBytes > 0 ? ` · 约 ${formatBytes(totalBytes)}` : "";
+
+        titleEl.innerText = `批量下载到 NAS (共 ${items.length} 项)`;
+        iconEl.innerText = "📦";
+        nameEl.innerText = `已选择 ${summaryParts.join("、")}${sizeSuffix}`;
+        submitBtn.innerText = `⚡ 立即批量下载 (${items.length} 项)`;
+
+        batchListEl.style.display = "flex";
+        batchListEl.innerHTML = items.map((it, idx) => {
+          const ic = it.resType === 2 ? "📁" : getFileIcon(it.fileName);
+          const sz = it.resType === 2 ? "文件夹" : formatBytes(it.fileSize);
+          return `<div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 4px;">
+            <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1;">${idx + 1}. ${ic} ${escapeHtml(it.fileName)}</span>
+            <span style="color: var(--text-muted); flex-shrink: 0; font-family: monospace;">${sz}</span>
+          </div>`;
+        }).join("");
+      }
+
       openModal("downloadConfirmModal");
+    }
+
+    function promptStartDownload(fileId, fileName, resType = 1, fileSize = 0) {
+      openDownloadModalWithItems([{
+        fileId: fileId,
+        fileName: fileName,
+        resType: resType || 1,
+        fileSize: fileSize || 0
+      }]);
+    }
+
+    function promptBatchDownload() {
+      if (selectedFileIds.size === 0) {
+        showToast("💡 请先在列表中勾选要下载的文件或文件夹（可点击表头复选框一键全选）");
+        return;
+      }
+      const items = currentRawFiles
+        .filter(f => selectedFileIds.has(f.fileId))
+        .map(f => ({
+          fileId: f.fileId,
+          fileName: f.fileName,
+          resType: f.resType || 1,
+          fileSize: f.fileSize || 0
+        }));
+      if (items.length === 0) {
+        showToast("未找到已勾选的文件，请重新选择");
+        return;
+      }
+      openDownloadModalWithItems(items);
     }
 
     function onDlConfirmFolderPicked(selectedPath) {
@@ -2815,40 +4397,58 @@ function escapeHtml(str) {
 
     async function confirmStartDownload() {
       const targetDir = document.getElementById("dlConfirmPathInput").value.trim() || defaultDownloadDir;
-      const setAsDefault = document.getElementById("setAsDefaultDirCheckbox").checked;
+      const setAsDefault = document.getElementById("dlConfirmSetDefaultCb").checked;
+      const newConcurrent = parseInt(document.getElementById("dlConfirmMaxConcurrentInput").value, 10) || maxConcurrentDownloads;
+      const clampedConcurrent = Math.max(1, Math.min(16, newConcurrent));
 
-      if (setAsDefault) {
-        defaultDownloadDir = targetDir;
+      if (setAsDefault || clampedConcurrent !== maxConcurrentDownloads) {
+        const payload = { max_concurrent_downloads: clampedConcurrent };
+        if (setAsDefault) {
+          defaultDownloadDir = targetDir;
+          payload.download_dir = targetDir;
+        }
+        maxConcurrentDownloads = clampedConcurrent;
+        syncMaxConcurrentInputs(clampedConcurrent);
         await fetch("/api/settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ download_dir: targetDir })
+          body: JSON.stringify(payload)
         });
       }
 
-      // Check if file already exists in target NAS directory
-      try {
-        const checkRes = await fetch(`/api/fs/check-file?targetDir=${encodeURIComponent(targetDir)}&fileName=${encodeURIComponent(pendingDownloadFileName)}`);
-        const checkData = await checkRes.json();
-        if (checkData.exists) {
-          duplicateContext = {
-            fileId: pendingDownloadFileId,
-            originalFileName: pendingDownloadFileName,
-            suggestedFileName: checkData.suggestedName,
-            targetDir: targetDir
-          };
-          document.getElementById("duplicateFileNameDisplay").innerText = pendingDownloadFileName;
-          document.getElementById("duplicateSuggestedNameBadge").innerText = `新文件名: ${checkData.suggestedName}`;
-          closeModal("downloadConfirmModal");
-          openModal("duplicateFileModal");
-          return;
+      // Single regular file: preserve interactive duplicate file modal
+      if (pendingDownloadItems.length === 1 && pendingDownloadItems[0].resType !== 2) {
+        const single = pendingDownloadItems[0];
+        try {
+          const checkRes = await fetch(`/api/fs/check-file?targetDir=${encodeURIComponent(targetDir)}&fileName=${encodeURIComponent(single.fileName)}`);
+          const checkData = await checkRes.json();
+          if (checkData.exists) {
+            duplicateContext = {
+              fileId: single.fileId,
+              originalFileName: single.fileName,
+              suggestedFileName: checkData.suggestedName,
+              targetDir: targetDir,
+              fileSize: single.fileSize || 0
+            };
+            document.getElementById("duplicateFileNameDisplay").innerText = single.fileName;
+            document.getElementById("duplicateSuggestedNameBadge").innerText = `新文件名: ${checkData.suggestedName}`;
+            closeModal("downloadConfirmModal");
+            openModal("duplicateFileModal");
+            return;
+          }
+        } catch (e) {
+          console.warn("Check file existence failed:", e);
         }
-      } catch (e) {
-        console.warn("Check file existence failed:", e);
+
+        closeModal("downloadConfirmModal");
+        executeDownload(single.fileId, single.fileName, targetDir, single.fileSize || 0);
+        return;
       }
 
+      // Batch or folder download
+      const conflictPolicy = document.getElementById("dlConfirmConflictSelect").value || "skip";
       closeModal("downloadConfirmModal");
-      executeDownload(pendingDownloadFileId, pendingDownloadFileName, targetDir);
+      executeBatchDownload(pendingDownloadItems, targetDir, conflictPolicy);
     }
 
     function resolveDuplicateAndDownload(action) {
@@ -2856,14 +4456,14 @@ function escapeHtml(str) {
       const ctx = duplicateContext;
       closeModal("duplicateFileModal");
       if (action === "rename") {
-        executeDownload(ctx.fileId, ctx.suggestedFileName, ctx.targetDir);
+        executeDownload(ctx.fileId, ctx.suggestedFileName, ctx.targetDir, ctx.fileSize || 0);
       } else if (action === "overwrite") {
-        executeDownload(ctx.fileId, ctx.originalFileName, ctx.targetDir);
+        executeDownload(ctx.fileId, ctx.originalFileName, ctx.targetDir, ctx.fileSize || 0);
       }
     }
 
-    async function executeDownload(fileId, fileName, targetDir) {
-      showToast("正在启动后台下载...");
+    async function executeDownload(fileId, fileName, targetDir, fileSize = 0) {
+      showToast("正在加入下载队列...");
       try {
         const res = await fetch("/api/download-task", {
           method: "POST",
@@ -2871,7 +4471,8 @@ function escapeHtml(str) {
           body: JSON.stringify({
             fileId: fileId,
             fileName: fileName,
-            targetDir: targetDir
+            targetDir: targetDir,
+            fileSize: fileSize
           })
         });
         const d = await res.json();
@@ -2881,6 +4482,34 @@ function escapeHtml(str) {
         }
       } catch (e) {
         alert("启动下载失败: " + e.message);
+      }
+    }
+
+    async function executeBatchDownload(items, targetDir, conflictPolicy) {
+      showToast("⏳ 正在提交批量下载队列...");
+      try {
+        const res = await fetch("/api/batch-download-task", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            items: items,
+            targetDir: targetDir,
+            conflictPolicy: conflictPolicy
+          })
+        });
+        const d = await res.json();
+        if (d.success) {
+          selectedFileIds.clear();
+          renderFileList();
+          const skipMsg = d.skippedCount > 0 ? `（已跳过 ${d.skippedCount} 个同名文件）` : "";
+          const expandMsg = d.expandingFolders ? "，深层子目录正在后台持续加入队列" : "";
+          showToast(`🚀 已加入 ${d.queuedCount} 个下载任务到队列${skipMsg}${expandMsg}！`);
+          switchView("transfers");
+        } else {
+          alert("批量下载提交失败: " + (d.error || JSON.stringify(d)));
+        }
+      } catch (e) {
+        alert("批量下载失败: " + e.message);
       }
     }
 
@@ -3085,8 +4714,24 @@ function escapeHtml(str) {
       const activeList = list.filter(t => t.status === "downloading" || t.status === "pending" || t.status === "getting_url");
       const doneList = list.filter(t => t.status === "completed" || t.status === "failed" || t.status === "cancelled");
 
+      // Sort activeList: downloading/getting_url first, then pending in FIFO order (seq)
+      activeList.sort((a, b) => {
+        const aRunning = (a.status === "downloading" || a.status === "getting_url") ? 0 : 1;
+        const bRunning = (b.status === "downloading" || b.status === "getting_url") ? 0 : 1;
+        if (aRunning !== bRunning) return aRunning - bRunning;
+        return (a.seq || a.startTime || 0) - (b.seq || b.startTime || 0);
+      });
+
+      // Sort doneList: newest first
+      doneList.sort((a, b) => (b.seq || b.startTime || 0) - (a.seq || a.startTime || 0));
+
       document.getElementById("countActiveDl").innerText = activeList.length;
       document.getElementById("countDoneDl").innerText = doneList.length;
+
+      const cancelAllBtn = document.getElementById("cancelAllDlBtn");
+      if (cancelAllBtn) {
+        cancelAllBtn.style.display = (activeList.length > 0) ? "inline-flex" : "none";
+      }
 
       const badge = document.getElementById("activeDlBadge");
       if (badge) {
@@ -3105,6 +4750,7 @@ function escapeHtml(str) {
         return;
       }
 
+      let pendingIdx = 0;
       c.innerHTML = "";
       displayList.forEach(t => {
         const isDone = (t.status === "completed");
@@ -3118,7 +4764,11 @@ function escapeHtml(str) {
         else if (isFailed) { badgeClass = "status-failed"; statusText = "下载失败"; }
         else if (isCancelled) { badgeClass = "status-failed"; statusText = "已取消"; }
         else if (t.status === "getting_url") { statusText = "获取直链中"; }
-        else if (t.status === "pending") { statusText = "排队中"; }
+        else if (t.status === "pending") {
+          pendingIdx++;
+          badgeClass = "status-warning";
+          statusText = `排队中 (#${pendingIdx})`;
+        }
 
         const div = document.createElement("div");
         div.className = "task-card";
@@ -3131,7 +4781,9 @@ function escapeHtml(str) {
             </div>
             <div style="display: flex; gap: 8px; align-items: center;">
               <span class="status-badge ${badgeClass}">${statusText}</span>
-              ${isRunning ? `<button class="btn-danger btn-sm" onclick="cancelTransfer('${t.taskId}')">取消</button>` : `<button class="btn-outline btn-sm" onclick="deleteTransfer('${t.taskId}')">删除记录</button>`}
+              ${(isFailed || isCancelled) ? `<button class="btn-secondary btn-sm" onclick="retryTransfer('${t.taskId}')">🔄 重试</button>` : ''}
+              ${isRunning ? `<button class="btn-secondary btn-sm" onclick="cancelTransfer('${t.taskId}')">⏹️ 取消</button>` : ''}
+              <button class="btn-outline btn-sm" onclick="deleteTransfer('${t.taskId}')">🗑️ 删除</button>
             </div>
           </div>
 
@@ -3165,19 +4817,116 @@ function escapeHtml(str) {
       loadTransfers();
     }
 
-    async function deleteTransfer(taskId) {
-      await fetch("/api/transfers/delete", {
+    async function retryTransfer(taskId) {
+      await fetch("/api/transfers/retry", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ taskId })
       });
+      showToast("已重新加入下载队列");
       loadTransfers();
     }
 
-    async function clearCompletedDownloads() {
-      await fetch("/api/transfers/clear-completed", { method: "POST" });
-      showToast("已清空已完成记录");
+    async function cancelAllTransfers() {
+      const res = await fetch("/api/transfers/cancel-all", { method: "POST" });
+      const d = await res.json();
+      showToast(`已取消全部 ${d.cancelled || 0} 个任务`);
       loadTransfers();
+    }
+
+    function syncMaxConcurrentInputs(val) {
+      maxConcurrentDownloads = val;
+      ["transferMaxConcurrentInput", "settingMaxConcurrentInput", "dlConfirmMaxConcurrentInput"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = val;
+      });
+    }
+
+    async function updateMaxConcurrentSetting(val) {
+      let n = parseInt(val, 10);
+      if (isNaN(n)) n = 3;
+      if (n < 1) n = 1;
+      if (n > 16) n = 16;
+      syncMaxConcurrentInputs(n);
+      try {
+        await fetch("/api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ max_concurrent_downloads: n })
+        });
+        showToast(`已将同时下载任务上限设为 ${n} 个`);
+        loadTransfers();
+      } catch (e) {
+        alert("保存并发设置失败: " + e.message);
+      }
+    }
+
+    let pendingDeleteTransferId = null;
+
+    function deleteTransfer(taskId) {
+      const t = localDownloadsMap[taskId];
+      pendingDeleteTransferId = taskId;
+      document.getElementById("deleteTransferModalTitle").innerText = "删除下载任务";
+      document.getElementById("deleteTransferPromptLabel").innerText = "确定要删除以下下载任务吗？";
+      document.getElementById("deleteTransferTaskName").innerText = t ? t.fileName : taskId;
+      const pathWrap = document.getElementById("deleteTransferPathWrap");
+      const pathEl = document.getElementById("deleteTransferFilePath");
+      if (t && (t.path || t.targetDir)) {
+        pathWrap.style.display = "block";
+        pathEl.innerText = t.path || t.targetDir;
+      } else {
+        pathWrap.style.display = "none";
+      }
+      // Default check: if task is cancelled/failed/running (incomplete) or user wants to clean up, uncheck by default for completed or check? Let's keep unchecked or remember last choice? Wait: user asked "应该在删除时增加一个询问是否删除nas上的文件选项", let's default to checked if incomplete, or false/true clearly selectable! Actually let's check if incomplete (status !== 'completed') so partial files are cleaned, or false when completed so user can check it. Wait—let's check what user said: "删除下载任务后，在nas的硬盘上文件还是存在，没有删除掉，应该在删除时增加一个询问是否删除nas上的文件选项". Let's default checkbox to false (or true if status !== 'completed') and make the checkbox super clear!
+      document.getElementById("deleteTransferFileCheckbox").checked = (t && t.status !== "completed");
+      openModal("deleteTransferModal");
+    }
+
+    function clearCompletedDownloads() {
+      const doneList = Object.values(localDownloadsMap).filter(t => t.status === "completed" || t.status === "failed" || t.status === "cancelled");
+      if (doneList.length === 0) {
+        showToast("当前没有可清空的已完成/历史记录");
+        return;
+      }
+      pendingDeleteTransferId = "__ALL_DONE__";
+      document.getElementById("deleteTransferModalTitle").innerText = "清空已完成与历史记录";
+      document.getElementById("deleteTransferPromptLabel").innerText = "确定要清空全部已完成、已取消及失败的下载任务吗？";
+      document.getElementById("deleteTransferTaskName").innerText = `共 ${doneList.length} 条下载任务记录`;
+      document.getElementById("deleteTransferPathWrap").style.display = "none";
+      document.getElementById("deleteTransferFileCheckbox").checked = false;
+      openModal("deleteTransferModal");
+    }
+
+    async function confirmDeleteTransfer() {
+      if (!pendingDeleteTransferId) return;
+      const deleteFile = document.getElementById("deleteTransferFileCheckbox").checked;
+      const btn = document.getElementById("confirmDeleteTransferBtn");
+      btn.disabled = true;
+      btn.innerText = "正在删除...";
+      try {
+        if (pendingDeleteTransferId === "__ALL_DONE__") {
+          await fetch("/api/transfers/clear-completed", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ deleteFile })
+          });
+          showToast("已清空历史记录" + (deleteFile ? "并删除对应 NAS 本地文件" : ""));
+        } else {
+          await fetch("/api/transfers/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ taskId: pendingDeleteTransferId, deleteFile })
+          });
+          showToast("已删除下载任务" + (deleteFile ? "及 NAS 本地文件" : ""));
+        }
+        closeModal("deleteTransferModal");
+        loadTransfers();
+      } catch (e) {
+        alert("删除失败: " + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerText = "确定删除";
+      }
     }
 
     // ================= VIEW: OFFLINE TASKS (Issue 4 - Status Logic) =================
@@ -3388,12 +5137,25 @@ function escapeHtml(str) {
 
     // ================= VIEW: SETTINGS & ABOUT =================
     async function loadSettings() {
+      const host = window.location.hostname || "NAS_IP";
+      const directUrl = `http://${host}:8998`;
+      const linkEl = document.getElementById("aboutWebAccessLink");
+      const codeEl = document.getElementById("aboutWebAccessCode");
+      if (linkEl) { linkEl.href = directUrl; linkEl.innerText = directUrl; }
+      if (codeEl) { codeEl.innerText = directUrl; }
       try {
         const res = await fetch("/api/settings");
         const d = await res.json();
         if (d.download_dir) {
           defaultDownloadDir = d.download_dir;
           document.getElementById("settingDownloadDirInput").value = defaultDownloadDir;
+        }
+        if (d.max_concurrent_downloads) {
+          syncMaxConcurrentInputs(d.max_concurrent_downloads);
+        }
+        if (d.file_page_size !== undefined && d.file_page_size !== null) {
+          syncFilePageSizeInputs(d.file_page_size);
+          if (currentRawFiles.length > 0) renderFileList();
         }
         if (d.version) {
           const vEl = document.getElementById("aboutCurrentVersion");
@@ -3495,15 +5257,30 @@ function escapeHtml(str) {
 
     async function saveDownloadDirSetting() {
       const path = document.getElementById("settingDownloadDirInput").value.trim();
+      const mcEl = document.getElementById("settingMaxConcurrentInput");
+      const psEl = document.getElementById("settingFilePageSizeInput");
+      let mcVal = mcEl ? parseInt(mcEl.value, 10) : maxConcurrentDownloads;
+      if (isNaN(mcVal) || mcVal < 1) mcVal = 1;
+      if (mcVal > 16) mcVal = 16;
+      let psVal = psEl ? parseInt(psEl.value, 10) : filePageSize;
+      if (isNaN(psVal) || psVal < 0) psVal = 20;
+      if (psVal > 5000) psVal = 5000;
       if (!path) return;
       try {
         await fetch("/api/settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ download_dir: path })
+          body: JSON.stringify({
+            download_dir: path,
+            max_concurrent_downloads: mcVal,
+            file_page_size: psVal
+          })
         });
         defaultDownloadDir = path;
-        showToast("NAS 保存目录设置已保存");
+        syncMaxConcurrentInputs(mcVal);
+        syncFilePageSizeInputs(psVal);
+        renderFileList();
+        showToast("NAS 下载目录、并发与分页设置已保存");
       } catch (e) {
         alert("保存失败: " + e.message);
       }
@@ -3881,7 +5658,10 @@ function escapeHtml(str) {
       }
     }
 
-    async function openCloudFolderPickerModal() {
+    let cloudFolderPickerCallback = null;
+
+    async function openCloudFolderPickerModal(customCallback = null, initId = null, initPath = null) {
+      cloudFolderPickerCallback = customCallback;
       openModal("cloudFolderPickerModal");
       const container = document.getElementById("cloudFolderTreeContainer");
       container.innerHTML = `<div style="text-align:center; padding:35px; color:var(--text-muted); font-size:13px;">正在读取网盘目录...</div>`;
@@ -3898,7 +5678,10 @@ function escapeHtml(str) {
       }
 
       // Initial selection
-      if (cloudAddTargetParentId) {
+      if (initId !== null) {
+        cloudTreeSelectedId = initId;
+        cloudTreeSelectedPath = initPath || getCloudFolderPath(initId);
+      } else if (cloudAddTargetParentId) {
         cloudTreeSelectedId = cloudAddTargetParentId;
         cloudTreeSelectedPath = cloudAddTargetFolderPath || getCloudFolderPath(cloudAddTargetParentId);
       } else if (cloudDefaultTargetId) {
@@ -4061,10 +5844,375 @@ function escapeHtml(str) {
     }
 
     function confirmCloudFolderTreeSelection() {
-      cloudAddTargetParentId = cloudTreeSelectedId;
-      cloudAddTargetFolderPath = cloudTreeSelectedPath || "全部文件";
-      document.getElementById("cloudAddTargetFolderDisplay").innerText = cloudAddTargetFolderPath;
+      const selId = cloudTreeSelectedId || "";
+      const selPath = cloudTreeSelectedPath || "全部文件";
+      if (typeof cloudFolderPickerCallback === "function") {
+        const cb = cloudFolderPickerCallback;
+        cloudFolderPickerCallback = null;
+        cb(selId, selPath);
+      } else {
+        cloudAddTargetParentId = selId;
+        cloudAddTargetFolderPath = selPath;
+        const el = document.getElementById("cloudAddTargetFolderDisplay");
+        if (el) el.innerText = selPath;
+      }
       closeModal("cloudFolderPickerModal");
+    }
+
+    // ================= STRM MEDIA CENTER & QUICK GENERATOR =================
+    let strmState = {
+      cloudParentId: "",
+      cloudFolderPath: "全部文件",
+      outputDir: "",
+      baseUrl: "",
+      detectedIp: "127.0.0.1",
+      panelTab: "recent",
+      running: false
+    };
+
+    let quickStrmTarget = {
+      id: "",
+      name: "",
+      isDir: true,
+      cloudPath: "全部文件"
+    };
+
+    function switchStrmPanelTab(tab) {
+      strmState.panelTab = tab;
+      document.getElementById("tabStrmRecentBtn")?.classList.toggle("active", tab === "recent");
+      document.getElementById("tabStrmLogsBtn")?.classList.toggle("active", tab === "logs");
+      document.getElementById("strmRecentListContainer").style.display = (tab === "recent") ? "flex" : "none";
+      document.getElementById("strmLogsContainer").style.display = (tab === "logs") ? "block" : "none";
+    }
+
+    async function loadStrmView(populateInputs = false) {
+      try {
+        const res = await fetch("/api/strm/config");
+        const data = await res.json();
+        const cfg = data.config || {};
+        strmState.detectedIp = data.detected_ip || "127.0.0.1";
+        strmState.outputDir = cfg.output_dir || "";
+        strmState.baseUrl = cfg.base_url || `http://${strmState.detectedIp}:8998`;
+
+        if (populateInputs) {
+          strmState.cloudParentId = cfg.cloud_parent_id || "";
+          strmState.cloudFolderPath = cfg.cloud_folder_path || "全部文件";
+          document.getElementById("strmCloudPathInput").value = strmState.cloudFolderPath;
+          document.getElementById("strmOutputDirInput").value = strmState.outputDir;
+          document.getElementById("strmBaseUrlInput").value = strmState.baseUrl;
+          document.getElementById("strmScheduleSelect").value = String(cfg.schedule_interval_min || 0);
+          document.getElementById("strmDlSubsCb").checked = cfg.download_subtitles !== false;
+          document.getElementById("strmDlMetaCb").checked = !!cfg.download_metadata;
+          document.getElementById("strmAutoOfflineCb").checked = cfg.auto_sync_offline !== false;
+          document.getElementById("strmOverwriteCb").checked = cfg.overwrite !== false;
+          document.getElementById("strmCleanOrphansCb").checked = !!cfg.clean_orphans;
+          document.getElementById("strmUseProxyCb").checked = !!cfg.use_proxy;
+        }
+        renderStrmStatus(data);
+      } catch (e) {
+        console.error("Failed to load STRM view:", e);
+      }
+    }
+
+    function renderStrmStatus(data) {
+      if (!data) return;
+      const st = data.status || {};
+      const running = !!st.running;
+      strmState.running = running;
+
+      const navBadge = document.getElementById("strmRunningBadge");
+      if (navBadge) navBadge.style.display = running ? "inline-block" : "none";
+
+      const topBadge = document.getElementById("strmTopStatusBadge");
+      const startBtn = document.getElementById("strmStartSyncBtn");
+      const cancelBtn = document.getElementById("strmCancelSyncBtn");
+
+      if (topBadge) {
+        if (running) {
+          topBadge.className = "status-badge status-active";
+          topBadge.innerText = "⏳ 正在同步中...";
+        } else if (st.status === "completed") {
+          topBadge.className = "status-badge status-success";
+          topBadge.innerText = "✅ 同步已完成";
+        } else if (st.status === "failed") {
+          topBadge.className = "status-badge status-failed";
+          topBadge.innerText = "❌ 同步异常";
+        } else if (st.status === "cancelled") {
+          topBadge.className = "status-badge status-warning";
+          topBadge.innerText = "⏹️ 已停止";
+        } else {
+          topBadge.className = "status-badge status-success";
+          topBadge.innerText = "就绪";
+        }
+      }
+
+      if (startBtn) {
+        startBtn.disabled = running;
+        startBtn.innerText = running ? "⏳ 同步执行中..." : "⚡ 立即同步 STRM 影视库";
+      }
+      if (cancelBtn) {
+        cancelBtn.style.display = running ? "inline-flex" : "none";
+      }
+
+      const createdTotal = (st.createdStrm || 0) + (st.updatedStrm || 0);
+      const elCreated = document.getElementById("statStrmCreated");
+      if (elCreated) elCreated.innerText = createdTotal;
+      const elSkipped = document.getElementById("statStrmSkipped");
+      if (elSkipped) elSkipped.innerText = st.skippedStrm || 0;
+      const elSubs = document.getElementById("statStrmSubs");
+      if (elSubs) elSubs.innerText = st.downloadedSubs || 0;
+      const elScanned = document.getElementById("statStrmScanned");
+      if (elScanned) elScanned.innerText = st.scannedDirs || 0;
+
+      const cacheEl = document.getElementById("strmCacheCountText");
+      if (cacheEl) cacheEl.innerText = data.cache_count || 0;
+      const hitsEl = document.getElementById("strmTotalHitsText");
+      if (hitsEl) hitsEl.innerText = `302 缓存命中: ${data.total_hits || 0} 次`;
+
+      const actEl = document.getElementById("strmCurrentActionText");
+      const fileEl = document.getElementById("strmCurrentFileText");
+      if (actEl && fileEl) {
+        if (running) {
+          actEl.innerText = `正在扫描目录: ${st.currentDir || '全部文件'} (${st.reason || '同步'})`;
+          fileEl.innerText = `当前处理: ${st.currentFile || '读取列表中...'}`;
+        } else if (st.status === "completed") {
+          actEl.innerText = `上次同步完成 (${st.reason || '手动'}) · 共扫描 ${st.scannedFiles || 0} 个文件`;
+          fileEl.innerText = `新增 ${st.createdStrm || 0} 个 · 更新 ${st.updatedStrm || 0} 个 · 跳过 ${st.skippedStrm || 0} 个 · 字幕 ${st.downloadedSubs || 0} 个`;
+        } else if (st.status === "failed") {
+          actEl.innerText = `同步失败`;
+          fileEl.innerText = st.error || "请检查网盘登录状态或目录权限";
+        }
+      }
+
+      // Render Recent Files
+      const recentList = st.recentFiles || [];
+      const countEl = document.getElementById("countStrmRecent");
+      if (countEl) countEl.innerText = recentList.length;
+
+      const rContainer = document.getElementById("strmRecentListContainer");
+      if (rContainer) {
+        if (recentList.length === 0) {
+          rContainer.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 36px 12px; font-size: 12.5px;">尚未生成 STRM 记录，点击「⚡ 立即同步 STRM 影视库」开始构建海报墙音源。</div>`;
+        } else {
+          rContainer.innerHTML = "";
+          recentList.forEach(item => {
+            const row = document.createElement("div");
+            row.style.cssText = "display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); font-size: 12.5px;";
+            row.innerHTML = `
+              <div style="min-width: 0; flex: 1;">
+                <div style="font-weight: 600; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(item.strmName)}">
+                  🎬 ${escapeHtml(item.strmName)}
+                </div>
+                <div style="font-size: 11px; color: var(--text-muted); font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px;" title="${escapeHtml(item.strmPath)}">
+                  ${escapeHtml(item.strmPath)}
+                </div>
+              </div>
+              <div style="display: flex; gap: 6px; flex-shrink: 0;">
+                <button class="btn-secondary btn-sm" style="padding: 3px 8px; font-size: 11.5px;" onclick="copyStrmUrl('${escapeHtml(item.streamUrl)}')" title="复制 302 播放地址 (可在 PotPlayer/VLC/浏览器测试)">🔗 复制串流</button>
+              </div>
+            `;
+            rContainer.appendChild(row);
+          });
+        }
+      }
+
+      // Render Logs
+      const logs = st.logs || [];
+      const lContainer = document.getElementById("strmLogsContainer");
+      if (lContainer) {
+        if (logs.length === 0) {
+          lContainer.innerText = "暂无执行日志";
+        } else {
+          lContainer.innerText = logs.join("\\n");
+          lContainer.scrollTop = lContainer.scrollHeight;
+        }
+      }
+    }
+
+    async function copyStrmUrl(url) {
+      await copyToClipboard(url);
+      showToast("302 动态串流链接已复制！可粘贴至播放器测试");
+    }
+
+    function pickStrmCloudFolder() {
+      openCloudFolderPickerModal((folderId, folderPath) => {
+        strmState.cloudParentId = folderId || "";
+        strmState.cloudFolderPath = folderPath || "全部文件";
+        document.getElementById("strmCloudPathInput").value = strmState.cloudFolderPath;
+      }, strmState.cloudParentId, strmState.cloudFolderPath);
+    }
+
+    function onStrmOutputFolderPicked(selectedPath) {
+      document.getElementById("strmOutputDirInput").value = selectedPath;
+    }
+
+    function autoFillStrmBaseUrl() {
+      const hostIp = strmState.detectedIp && strmState.detectedIp !== "127.0.0.1"
+        ? strmState.detectedIp
+        : (window.location.hostname || "127.0.0.1");
+      const url = `http://${hostIp}:8998`;
+      document.getElementById("strmBaseUrlInput").value = url;
+      showToast(`已填入 NAS 局域网网关地址: ${url}`);
+    }
+
+    async function saveStrmConfig(showNotification = true) {
+      const payload = {
+        cloud_parent_id: strmState.cloudParentId || "",
+        cloud_folder_path: document.getElementById("strmCloudPathInput").value.trim() || "全部文件",
+        output_dir: document.getElementById("strmOutputDirInput").value.trim(),
+        base_url: document.getElementById("strmBaseUrlInput").value.trim(),
+        schedule_interval_min: parseInt(document.getElementById("strmScheduleSelect").value || "0", 10),
+        download_subtitles: document.getElementById("strmDlSubsCb").checked,
+        download_metadata: document.getElementById("strmDlMetaCb").checked,
+        auto_sync_offline: document.getElementById("strmAutoOfflineCb").checked,
+        overwrite: document.getElementById("strmOverwriteCb").checked,
+        clean_orphans: document.getElementById("strmCleanOrphansCb").checked,
+        use_proxy: document.getElementById("strmUseProxyCb").checked
+      };
+      try {
+        const res = await fetch("/api/strm/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const d = await res.json();
+        if (d.config) {
+          strmState.outputDir = d.config.output_dir;
+          strmState.baseUrl = d.config.base_url;
+        }
+        if (showNotification) showToast("STRM 映射与播放网关配置已保存");
+        return true;
+      } catch (e) {
+        if (showNotification) alert("保存 STRM 配置失败: " + e.message);
+        return false;
+      }
+    }
+
+    async function triggerFullStrmSync() {
+      await saveStrmConfig(false);
+      try {
+        const res = await fetch("/api/strm/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            cloudParentId: strmState.cloudParentId || "",
+            cloudFolderPath: document.getElementById("strmCloudPathInput").value.trim() || "全部文件",
+            outputDir: document.getElementById("strmOutputDirInput").value.trim(),
+            reason: "全量/增量同步"
+          })
+        });
+        const d = await res.json();
+        if (d.error && !d.started) {
+          alert(d.error);
+        } else {
+          showToast("🎬 已启动 STRM 影视库后台同步任务！");
+          loadStrmView(false);
+        }
+      } catch (e) {
+        alert("启动 STRM 同步失败: " + e.message);
+      }
+    }
+
+    async function cancelStrmSync() {
+      try {
+        await fetch("/api/strm/cancel", { method: "POST" });
+        showToast("正在停止 STRM 同步任务...");
+        loadStrmView(false);
+      } catch (e) {}
+    }
+
+    async function clearStrmUrlCache() {
+      try {
+        const res = await fetch("/api/strm/clear-cache", { method: "POST" });
+        const d = await res.json();
+        showToast(`已清空 ${d.cleared || 0} 条 302 直链缓存`);
+        loadStrmView(false);
+      } catch (e) {}
+    }
+
+    // Quick STRM Modal from File Explorer
+    async function openQuickStrmModal(fileId, fileName, isDir) {
+      if (!strmState.outputDir) {
+        try {
+          const r = await fetch("/api/strm/config");
+          const d = await r.json();
+          if (d.config && d.config.output_dir) strmState.outputDir = d.config.output_dir;
+        } catch (e) {}
+      }
+      const basePath = (breadcrumbStack && breadcrumbStack.length > 0)
+        ? breadcrumbStack.map(b => b.name).join("/")
+        : "全部文件";
+      const fullCloudPath = fileName ? (basePath + "/" + fileName) : basePath;
+
+      quickStrmTarget = {
+        id: fileId,
+        name: fileName || "全部文件",
+        isDir: isDir,
+        cloudPath: isDir ? fullCloudPath : basePath
+      };
+
+      document.getElementById("quickStrmItemIcon").innerText = isDir ? "📁" : "🎬";
+      document.getElementById("quickStrmItemName").innerText = isDir ? fullCloudPath : fileName;
+      document.getElementById("quickStrmOutputDirInput").value = strmState.outputDir || (defaultDownloadDir + "/STRM影视库");
+      document.getElementById("quickStrmKeepFolderRow").style.display = (isDir && fileId !== "") ? "flex" : "none";
+      document.getElementById("quickStrmKeepFolderCb").checked = (isDir && fileId !== "");
+      openModal("quickStrmModal");
+    }
+
+    function openQuickStrmModalForCurrentDir() {
+      const currCrumb = (breadcrumbStack && breadcrumbStack.length > 0)
+        ? breadcrumbStack[breadcrumbStack.length - 1]
+        : { id: "", name: "全部文件" };
+      openQuickStrmModal(currCrumb.id, currCrumb.id === "" ? "" : currCrumb.name, true);
+    }
+
+    function onQuickStrmFolderPicked(selectedPath) {
+      document.getElementById("quickStrmOutputDirInput").value = selectedPath;
+    }
+
+    async function confirmQuickStrmGenerate() {
+      const outDir = document.getElementById("quickStrmOutputDirInput").value.trim();
+      if (!outDir) {
+        alert("请选择 NAS 本地 STRM 输出目录");
+        return;
+      }
+      const keepFolder = document.getElementById("quickStrmKeepFolderCb").checked;
+      const dlSubs = document.getElementById("quickStrmDlSubsCb").checked;
+
+      const payload = {
+        outputDir: outDir,
+        downloadSubtitles: dlSubs,
+        keepRootFolder: quickStrmTarget.isDir && keepFolder && quickStrmTarget.id !== "",
+        reason: `快捷生成 (${quickStrmTarget.name})`
+      };
+
+      if (quickStrmTarget.isDir) {
+        payload.cloudParentId = quickStrmTarget.id;
+        payload.cloudFolderPath = quickStrmTarget.cloudPath;
+      } else {
+        payload.singleFile = {
+          fileId: quickStrmTarget.id,
+          fileName: quickStrmTarget.name
+        };
+      }
+
+      try {
+        const res = await fetch("/api/strm/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const d = await res.json();
+        closeModal("quickStrmModal");
+        if (d.error && !d.started) {
+          alert(d.error);
+        } else {
+          showToast(`🎬 已启动 "${quickStrmTarget.name}" 的 STRM 生成任务`);
+          switchView("strm");
+        }
+      } catch (e) {
+        alert("请求生成 STRM 失败: " + e.message);
+      }
     }
 
     async function confirmSubmitCloudAdd() {
@@ -4498,8 +6646,9 @@ function escapeHtml(str) {
     loadFiles();
     loadSettings();
     loadCloudTasks();
+    loadStrmView(true);
 
-    // Polling timer for active downloads & cloud tasks
+    // Polling timer for active downloads & STRM sync tasks
     setInterval(() => {
       if (currentView === 'transfers') {
         loadTransfers();
@@ -4519,6 +6668,10 @@ function escapeHtml(str) {
             if (mDlBadge) mDlBadge.style.display = "none";
           }
         }).catch(()=>{});
+      }
+
+      if (currentView === 'strm' || strmState.running) {
+        loadStrmView(false);
       }
     }, 1500);
 
@@ -4558,15 +6711,79 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _handle_strm_stream(self, path: str, query: dict, is_head: bool = False):
+        """Handle STRM playback requests via 302 redirect (default) or HTTP range proxy."""
+        file_id = ""
+        if path.startswith("/strm/"):
+            parts = path.split("/")
+            if len(parts) > 2:
+                file_id = urllib.parse.unquote(parts[2]).strip()
+        if not file_id:
+            file_id = (query.get("fileId", [""])[0] or "").strip()
+
+        if not file_id:
+            self.send_error(400, "Missing fileId for STRM stream")
+            return
+
+        use_proxy = (query.get("proxy", ["0"])[0] in ("1", "true")) or bool(self.app.strm_config.get("use_proxy", False))
+        try:
+            signed_url = self.app.get_strm_redirect_url(file_id)
+        except Exception as e:
+            self.send_error(502, f"Failed to resolve Guangyapan signed URL: {e}")
+            return
+
+        if not use_proxy:
+            self.send_response(302)
+            self.send_header("Location", signed_url)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        # Optional proxy streaming mode with Range support
+        req_headers = {"User-Agent": self.app.client.USER_AGENT}
+        if "Range" in self.headers:
+            req_headers["Range"] = self.headers["Range"]
+        try:
+            req = urllib.request.Request(signed_url, headers=req_headers, method="HEAD" if is_head else "GET")
+            with urllib.request.urlopen(req, timeout=15) as up_resp:
+                self.send_response(up_resp.status)
+                for h_name in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"):
+                    val = up_resp.headers.get(h_name)
+                    if val:
+                        self.send_header(h_name, val)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                if not is_head:
+                    while True:
+                        chunk = up_resp.read(256 * 1024)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except urllib.error.HTTPError as he:
+            self.send_response(he.code)
+            self.end_headers()
+        except Exception as e:
+            try:
+                self.send_error(502, f"STRM Proxy Error: {e}")
+            except Exception:
+                pass
+
     def do_HEAD(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
+        query = urllib.parse.parse_qs(parsed.query)
         if path in ("/", "/index.html"):
             body = HTML_PAGE.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
+        elif path.startswith("/strm/") or path == "/api/strm/stream":
+            self._handle_strm_stream(path, query, is_head=True)
         else:
             self.send_response(200)
             self.end_headers()
@@ -4707,8 +6924,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/files":
             parent_id = query.get("parentId", [""])[0]
             try:
-                res = self.app.client.list_files(parent_id=parent_id)
-                self._send_json(res)
+                items = self.app.client.list_all_files(parent_id=parent_id)
+                self._send_json({"list": items, "total": len(items)})
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
 
@@ -4723,9 +6940,21 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/cloud-add/tasks":
             try:
                 res = self.app.client.list_cloud_tasks(page=0, page_size=100)
+                try:
+                    self.app.check_offline_tasks_for_strm(res.get("list") or [])
+                except Exception:
+                    pass
                 self._send_json(res)
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
+
+        elif path.startswith("/strm/") or path == "/api/strm/stream":
+            self._handle_strm_stream(path, query, is_head=False)
+            return
+
+        elif path in ("/api/strm/config", "/api/strm/status"):
+            self._send_json(self.app.get_strm_status_payload())
+            return
 
         elif path == "/api/transfers":
             self._send_json(self.app.downloads)
@@ -4733,6 +6962,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/settings":
             self._send_json({
                 "download_dir": self.app.download_dir,
+                "max_concurrent_downloads": self.app.max_concurrent_downloads,
+                "file_page_size": self.app.file_page_size,
                 "use_aria2": self.app.downloader.use_aria2,
                 "version": APP_VERSION,
                 "github_url": GITHUB_REPO_URL
@@ -4905,9 +7136,44 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/settings":
             body = json.loads(self.rfile.read(content_length).decode("utf-8"))
-            if "download_dir" in body:
+            if "download_dir" in body and body["download_dir"]:
                 self.app.set_download_dir(body["download_dir"])
-            self._send_json({"success": True, "download_dir": self.app.download_dir})
+            if "max_concurrent_downloads" in body:
+                self.app.set_max_concurrent_downloads(body["max_concurrent_downloads"])
+            if "file_page_size" in body:
+                self.app.set_file_page_size(body["file_page_size"])
+            self._send_json({
+                "success": True,
+                "download_dir": self.app.download_dir,
+                "max_concurrent_downloads": self.app.max_concurrent_downloads,
+                "file_page_size": self.app.file_page_size
+            })
+
+        elif path == "/api/strm/config":
+            body = json.loads(self.rfile.read(content_length).decode("utf-8")) if content_length > 0 else {}
+            cfg = self.app.save_strm_config(body)
+            self._send_json({"success": True, "config": cfg})
+
+        elif path == "/api/strm/sync":
+            body = json.loads(self.rfile.read(content_length).decode("utf-8")) if content_length > 0 else {}
+            res = self.app.start_strm_sync_task(
+                cloud_parent_id=body.get("cloudParentId"),
+                cloud_folder_path=body.get("cloudFolderPath"),
+                output_dir=body.get("outputDir"),
+                single_file=body.get("singleFile"),
+                keep_root_folder=bool(body.get("keepRootFolder", False)),
+                download_subtitles=body.get("downloadSubtitles"),
+                reason=body.get("reason") or "手动触发"
+            )
+            self._send_json(res)
+
+        elif path == "/api/strm/cancel":
+            self.app.cancel_strm_sync()
+            self._send_json({"success": True})
+
+        elif path == "/api/strm/clear-cache":
+            cleared = self.app.clear_strm_cache()
+            self._send_json({"success": True, "cleared": cleared})
 
         elif path == "/api/fs/mkdir":
             body = json.loads(self.rfile.read(content_length).decode("utf-8"))
@@ -4924,22 +7190,51 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/download-task":
             body = json.loads(self.rfile.read(content_length).decode("utf-8"))
-            task_id = self.app.start_download_task(body["fileId"], body["fileName"], body.get("targetDir"))
+            task_id = self.app.start_download_task(
+                body["fileId"],
+                body["fileName"],
+                body.get("targetDir"),
+                file_size=int(body.get("fileSize") or 0)
+            )
             self._send_json({"taskId": task_id})
+
+        elif path == "/api/batch-download-task":
+            body = json.loads(self.rfile.read(content_length).decode("utf-8")) if content_length > 0 else {}
+            res = self.app.start_batch_download_tasks(
+                items=body.get("items") or [],
+                target_dir=body.get("targetDir"),
+                conflict_policy=body.get("conflictPolicy") or "overwrite"
+            )
+            self._send_json(res)
 
         elif path == "/api/transfers/cancel":
             body = json.loads(self.rfile.read(content_length).decode("utf-8"))
             self.app.cancel_download_task(body.get("taskId", ""))
             self._send_json({"success": True})
 
-        elif path == "/api/transfers/delete":
+        elif path == "/api/transfers/cancel-all":
+            count = self.app.cancel_all_downloads()
+            self._send_json({"success": True, "cancelled": count})
+
+        elif path == "/api/transfers/retry":
             body = json.loads(self.rfile.read(content_length).decode("utf-8"))
-            self.app.delete_download_task(body.get("taskId", ""))
-            self._send_json({"success": True})
+            ok = self.app.retry_download_task(body.get("taskId", ""))
+            self._send_json({"success": ok})
+
+        elif path == "/api/transfers/delete":
+            body = json.loads(self.rfile.read(content_length).decode("utf-8")) if content_length > 0 else {}
+            res = self.app.delete_download_task(
+                body.get("taskId", ""),
+                delete_file=bool(body.get("deleteFile", False))
+            )
+            self._send_json({"success": True, **res})
 
         elif path == "/api/transfers/clear-completed":
-            self.app.clear_completed_tasks()
-            self._send_json({"success": True})
+            body = json.loads(self.rfile.read(content_length).decode("utf-8")) if content_length > 0 else {}
+            res = self.app.clear_completed_tasks(
+                delete_file=bool(body.get("deleteFile", False))
+            )
+            self._send_json({"success": True, **res})
 
         elif path == "/api/cloud-add/resolve":
             content_type = self.headers.get("Content-Type", "")

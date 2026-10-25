@@ -63,10 +63,13 @@ class FileDownloader:
     def __init__(self, use_aria2: bool = True):
         self.use_aria2 = use_aria2 and (shutil.which("aria2c") is not None)
         self.active_processes: Dict[str, subprocess.Popen] = {}
+        self.cancelled_tasks = set()
         self.lock = threading.Lock()
 
     def cancel_task(self, task_id: str):
         with self.lock:
+            if task_id:
+                self.cancelled_tasks.add(task_id)
             p = self.active_processes.pop(task_id, None)
             if p:
                 try:
@@ -75,6 +78,9 @@ class FileDownloader:
                     pass
 
     def download(self, url: str, output_path: str, progress_callback: Optional[Callable] = None, task_id: str = "") -> bool:
+        if task_id:
+            with self.lock:
+                self.cancelled_tasks.discard(task_id)
         dest_dir = os.path.dirname(output_path)
         if dest_dir:
             os.makedirs(dest_dir, exist_ok=True)
@@ -83,7 +89,7 @@ class FileDownloader:
         if self.use_aria2:
             ok = self._download_aria2(url, output_path, progress_callback, task_id)
         else:
-            ok = self._download_python(url, output_path, progress_callback)
+            ok = self._download_python(url, output_path, progress_callback, task_id)
 
         if ok and os.path.exists(output_path):
             fix_permissions(output_path)
@@ -150,9 +156,11 @@ class FileDownloader:
             if task_id:
                 with self.lock:
                     self.active_processes.pop(task_id, None)
-            return self._download_python(url, output_path, progress_callback)
+                    if task_id in self.cancelled_tasks:
+                        return False
+            return self._download_python(url, output_path, progress_callback, task_id)
 
-    def _download_python(self, url: str, output_path: str, progress_callback: Optional[Callable]) -> bool:
+    def _download_python(self, url: str, output_path: str, progress_callback: Optional[Callable], task_id: str = "") -> bool:
         req = urllib.request.Request(url, headers={
             "User-Agent": "GuangShanYun/1.0.0 Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         })
@@ -166,6 +174,8 @@ class FileDownloader:
                 last_downloaded = 0
 
                 while True:
+                    if task_id and task_id in self.cancelled_tasks:
+                        return False
                     chunk = resp.read(chunk_size)
                     if not chunk:
                         break

@@ -7,7 +7,7 @@ import sys
 import argparse
 
 BASE_DIR = r"d:\antigravity\guangyapan_fnos"
-VERSION = "1.1.1"
+VERSION = "1.2.1"
 
 def build_package(target_arch="x86_64"):
     is_arm = target_arch.lower() in ("arm", "arm64", "aarch64")
@@ -137,7 +137,7 @@ if __name__ == "__main__":
     ".url": {
         "guangyapan.Application": {
             "title": "光鸭网盘",
-            "desc": "光鸭网盘 Web 管理端 (by chaos)",
+            "desc": "光鸭网盘 Web 管理端 (端口: 8998 | 网页直连: http://<NAS_IP>:8998)",
             "icon": "images/icon_{0}.png",
             "type": "iframe",
             "protocol": "http",
@@ -180,7 +180,7 @@ if __name__ == "__main__":
     # Manifest
     manifest_content = f"""appname="guangyapan"
 version="{VERSION}"
-desc="光鸭网盘 fnOS 专用版，支持高速上传下载、磁链/BT云离线、NAS本地存储管理"
+desc="光鸭网盘 fnOS 专用版，支持高速上传下载、多选批量与并发队列下载、磁链/BT云离线、STRM影视库302直连播放网关。【网页访问说明】除在飞牛桌面点击图标打开窗口外，亦可在浏览器直接访问 http://<NAS_IP>:8998（默认端口：8998）独立运行。"
 arch="{arch_val}"
 platform="{platform_val}"
 maintainer="chaos"
@@ -197,7 +197,7 @@ install_type="root"
 checkport="false"
 micro_app="true"
 disable_authorization_path="true"
-changelog="{VERSION}: [{arch_tag.upper()} 架构 · chaos 适配版] 1. 飞牛桌面端点击图标支持以原生弹出窗口 (Micro App 任务窗口) 运行，内嵌完整功能视图，支持窗口拖拽、缩放及最大化；2. 直接通过 NAS IP:8998 端口访问保留完整独立浏览器页面运行；3. 优化窗口自适应视窗布局与任务栏联动。"
+changelog="{VERSION}: [{arch_tag.upper()} 架构 · chaos 适配版] 1. 新增多选批量下载（支持文件夹递归下载）与并发下载队列控制（默认 3 个并发，支持 1~16 手动调整与排队调度）；2. 突破目录 50 个文件显示上限（自动全量分页），新增底部每页显示数量设置（10/20/50/100/自定义）与翻页跳页栏；3. 删除本地下载任务时新增『同时删除 NAS 硬盘文件』确认弹窗；4. 应用介绍新增网页独立访问地址（http://<NAS_IP>:8998）与端口说明。"
 """
     with open(os.path.join(pkg_root, "manifest"), "w", encoding="utf-8", newline="\n") as f:
         f.write(manifest_content)

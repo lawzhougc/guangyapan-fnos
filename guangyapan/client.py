@@ -245,7 +245,7 @@ class GuangyapanClient:
             return {"code": -1, "msg": "获取资产失败", "data": {}}
 
     # ================= File & Folder Operations =================
-    def list_files(self, parent_id: str = "", page: int = 0, page_size: int = 50, order_by: int = 3, sort_type: int = 1) -> Dict[str, Any]:
+    def list_files(self, parent_id: str = "", page: int = 0, page_size: int = 100, order_by: int = 3, sort_type: int = 1) -> Dict[str, Any]:
         """
         List files in parent_id.
         order_by: 0: NAME, 1: SIZE, 2: CTIME, 3: UTIME
@@ -260,6 +260,32 @@ class GuangyapanClient:
         }
         res = self._post("/userres/v1/file/get_file_list", body)
         return res.get("data", {})
+
+    def list_all_files(self, parent_id: str = "", page_size: int = 100, order_by: int = 3, sort_type: int = 1) -> List[Dict[str, Any]]:
+        """
+        Fetch all files and folders in parent_id across pages, with deduplication guard.
+        """
+        all_items: List[Dict[str, Any]] = []
+        seen_ids = set()
+        page = 0
+        max_pages = 100
+        while page < max_pages:
+            data = self.list_files(parent_id=parent_id, page=page, page_size=page_size, order_by=order_by, sort_type=sort_type)
+            items = data.get("list") or []
+            if not items:
+                break
+            new_count = 0
+            for item in items:
+                fid = item.get("fileId")
+                if fid and fid not in seen_ids:
+                    seen_ids.add(fid)
+                    all_items.append(item)
+                    new_count += 1
+            total = data.get("total") or data.get("totalCount") or 0
+            if new_count == 0 or (total and len(all_items) >= total) or (not total and len(items) < page_size):
+                break
+            page += 1
+        return all_items
 
     def create_folder(self, name: str, parent_id: str = "") -> Dict[str, Any]:
         body = {
