@@ -7,7 +7,7 @@ import sys
 import argparse
 
 BASE_DIR = r"d:\antigravity\guangyapan_fnos"
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 
 def build_package(target_arch="x86_64"):
     is_arm = target_arch.lower() in ("arm", "arm64", "aarch64")

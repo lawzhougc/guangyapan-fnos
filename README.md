@@ -104,13 +104,13 @@ guangyapan_fnos/
    python3 build_fpk.py --arch arm64
    ```
    脚本将自动校验图标资源、写入目标架构清单（`platform = x86` 或 `platform = arm`）、压缩载荷并输出标准的安装包：
-   - `guangyapan-1.2.1-x86_64.fpk`（Intel / AMD 处理器）
-   - `guangyapan-1.2.1-arm64.fpk`（RK3588 / RK3568 / ARM 芯片）
+   - `guangyapan-1.2.2-x86_64.fpk`（Intel / AMD 处理器）
+   - `guangyapan-1.2.2-arm64.fpk`（RK3588 / RK3568 / ARM 芯片）
 
 2. **在飞牛私有云 (fnOS) 中安装**：
    - 打开飞牛 NAS 桌面，进入 **应用中心**。
    - 点击右上角或设置中的 **手动安装**。
-   - 选择打包生成的 `guangyapan-1.2.1-x86_64.fpk`（或对应架构包）文件并确认。
+   - 选择打包生成的 `guangyapan-1.2.2-x86_64.fpk`（或对应架构包）文件并确认。
    - 安装完成后，飞牛桌面与应用中心将自动生成光鸭网盘图标，点击即可直接进入 Web 管理端，或直接在浏览器访问 `http://<NAS_IP>:8998`。
 
 ---
@@ -127,7 +127,7 @@ python3 cli.py server -p 8998
 python3 cli.py list
 
 # 下载网盘文件至 NAS 指定路径
-python3 cli.py download <FILE_ID> -o /vol1/1000/Movies
+python3 cli.py download <FILE_ID> -o /path/to/data/Movies
 
 # 云添加磁力链接下载任务
 python3 cli.py magnet "magnet:?xt=urn:btih:..."
@@ -145,6 +145,12 @@ python3 cli.py upload /path/to/local/file.mp4
 ---
 
 ## 📝 更新日志 (Changelog)
+
+### v1.2.2 (2026-10-27)
+- 📜 **新增完整系统运行日志中心**：左侧导航栏新增独立的「📜 日志」页面，实时记录本地下载传输、云离线任务、STRM 影视库同步及系统服务运行事件。
+- 📊 **分类统计与实时状态**：提供全部、下载传输、云端离线、STRM 同步与系统服务 5 大类独立标签与实时角标计数。
+- 🔍 **多维过滤与便捷排查**：支持按 `INFO` / `SUCCESS` / `WARN` / `ERROR` 级别筛选、内容关键词模糊搜索、终端自动滚动跟随、一键清空日志与一键导出格式化 `.txt` 日志文件。
+- 🛡️ **内存与磁盘双层守护**：2000 条最近运行记录内存快速轮转缓冲，配合本地 `app.log` 5MB 自动滚动归档与容错处理，保障 NAS 长期稳定零冗余运行。
 
 ### v1.2.1 (2026-10-25)
 - 📦 **多选批量下载与文件夹递归下载**：支持在文件列表中多选文件及文件夹一键批量下载至 NAS，自动保持子目录层级结构，并提供批量同名文件冲突处理策略（跳过 / 覆盖 / 自动重命名）。

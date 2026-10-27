@@ -11,7 +11,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from .client import GuangyapanClient
 from .downloader import FileDownloader, fix_permissions, format_size, format_speed
 
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 GITHUB_REPO_URL = "https://github.com/lawzhougc/guangyapan-fnos"
 _VERSION_CACHE = {"last_check": 0, "data": None}
 
@@ -129,11 +129,163 @@ def detect_default_download_dir(preferred=""):
     home = os.path.expanduser("~")
     return os.path.join(home, "Downloads", "光鸭网盘").replace("\\", "/")
 
+class AppLogger:
+    """Centralized in-memory and persistent on-disk structured logger."""
+    def __init__(self, log_dir=None, max_in_memory=2000, max_file_bytes=5 * 1024 * 1024):
+        self.lock = threading.Lock()
+        self.max_in_memory = max_in_memory
+        self.max_file_bytes = max_file_bytes
+        self.log_dir = log_dir
+        self.log_file = None
+        self._seq = 0
+        self.logs = []
+        if log_dir:
+            self.setup_log_file(log_dir)
+
+    def setup_log_file(self, target_dir):
+        if not target_dir:
+            return
+        try:
+            os.makedirs(target_dir, exist_ok=True)
+            self.log_dir = target_dir
+            self.log_file = os.path.join(target_dir, "app.log").replace("\\", "/")
+        except Exception as e:
+            print(f"Error setting up log file: {e}")
+
+    def log(self, level: str, category: str, message: str, details: str = None):
+        now = time.time()
+        time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
+        lvl = (level or "INFO").upper()
+        cat = (category or "system").lower()
+        msg = str(message or "").strip()
+        det = str(details).strip() if details else ""
+
+        with self.lock:
+            self._seq += 1
+            item = {
+                "id": self._seq,
+                "time": time_str,
+                "ts": now,
+                "level": lvl,
+                "category": cat,
+                "message": msg,
+                "details": det
+            }
+            self.logs.append(item)
+            if len(self.logs) > self.max_in_memory:
+                del self.logs[:len(self.logs) - self.max_in_memory]
+
+        try:
+            print(f"[{time_str}] [{lvl:<7}] [{cat:<8}] {msg}")
+        except Exception:
+            try:
+                enc = sys.stdout.encoding or "utf-8"
+                safe_msg = msg.encode(enc, errors="replace").decode(enc)
+                print(f"[{time_str}] [{lvl:<7}] [{cat:<8}] {safe_msg}")
+            except Exception:
+                pass
+
+        if self.log_file:
+            try:
+                line = f"[{time_str}] [{lvl:<7}] [{cat:<8}] {msg}\n"
+                if det:
+                    line += f"    详情: {det}\n"
+                with open(self.log_file, "a", encoding="utf-8") as f:
+                    f.write(line)
+                if os.path.exists(self.log_file) and os.path.getsize(self.log_file) > self.max_file_bytes:
+                    bak = self.log_file + ".1"
+                    if os.path.exists(bak):
+                        try:
+                            os.remove(bak)
+                        except Exception:
+                            pass
+                    os.rename(self.log_file, bak)
+            except Exception:
+                pass
+
+    def get_logs(self, category=None, level=None, keyword=None, limit=300, since_id=0):
+        with self.lock:
+            all_logs = list(self.logs)
+            max_id = self._seq
+
+        cat_counts = {
+            "all": len(all_logs),
+            "download": sum(1 for l in all_logs if l["category"] == "download"),
+            "cloud": sum(1 for l in all_logs if l["category"] == "cloud"),
+            "strm": sum(1 for l in all_logs if l["category"] == "strm"),
+            "system": sum(1 for l in all_logs if l["category"] == "system")
+        }
+
+        filtered = all_logs
+        if since_id and int(since_id) > 0:
+            s_id = int(since_id)
+            filtered = [l for l in filtered if l["id"] > s_id]
+
+        if category and category.lower() != "all":
+            c = category.lower()
+            filtered = [l for l in filtered if l["category"] == c]
+
+        if level and level.upper() != "ALL":
+            l_val = level.upper()
+            filtered = [l for l in filtered if l["level"] == l_val]
+
+        if keyword:
+            kw = keyword.lower().strip()
+            filtered = [
+                l for l in filtered
+                if kw in l["message"].lower() or kw in l.get("details", "").lower()
+            ]
+
+        total_filtered = len(filtered)
+        if limit and int(limit) > 0:
+            lim = int(limit)
+            filtered = filtered[-lim:]
+
+        return {
+            "logs": filtered,
+            "total": total_filtered,
+            "max_id": max_id,
+            "categories": cat_counts
+        }
+
+    def clear(self):
+        with self.lock:
+            self.logs.clear()
+        if self.log_file and os.path.exists(self.log_file):
+            try:
+                with open(self.log_file, "w", encoding="utf-8") as f:
+                    f.truncate(0)
+            except Exception:
+                pass
+        self.log("INFO", "system", "🧹 用户清空了系统运行日志")
+        return True
+
+    def export_text(self):
+        with self.lock:
+            items = list(self.logs)
+        lines = [
+            "# 光鸭网盘 fnOS 原生客户端系统运行日志",
+            f"# 导出时间: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"# 记录条数: {len(items)}",
+            "-" * 60,
+            ""
+        ]
+        for item in items:
+            l = f"[{item['time']}] [{item['level']:<7}] [{item['category']:<8}] {item['message']}"
+            if item.get("details"):
+                l += f"\n    详情: {item['details']}"
+            lines.append(l)
+        return "\n".join(lines)
+
 class GuangyapanApp:
     def __init__(self, config_path="config.json"):
         self.config_path = config_path
         self.client = GuangyapanClient(config_path)
         self.downloader = FileDownloader(use_aria2=True)
+        # Initialize structured logger
+        cfg_dir = os.path.dirname(os.path.abspath(config_path))
+        self.logger = AppLogger(log_dir=cfg_dir)
+        self.logger.log("INFO", "system", f"🚀 光鸭网盘客户端核心引擎初始化 (版本: {APP_VERSION})")
         # task_id -> task dict
         self.downloads = {}
         self.download_queue_lock = threading.Lock()
@@ -213,10 +365,17 @@ class GuangyapanApp:
         self._last_scheduled_sync_ts = time.time()
         threading.Thread(target=self._strm_background_scheduler, daemon=True).start()
 
+    def log(self, level: str, category: str, message: str, details: str = None):
+        if hasattr(self, "logger") and self.logger:
+            self.logger.log(level, category, message, details)
+        else:
+            print(f"[{level}] [{category}] {message}")
+
     def set_download_dir(self, new_dir: str):
         self.download_dir = new_dir.rstrip("/\\")
         self.client.config["download_dir"] = self.download_dir
         self.client._save_config()
+        self.log("INFO", "system", f"📁 NAS 本地下载目录已更新为: {self.download_dir}")
         try:
             os.makedirs(self.download_dir, exist_ok=True)
             fix_permissions(self.download_dir)
@@ -311,6 +470,14 @@ class GuangyapanApp:
         logs.append(line)
         if len(logs) > 120:
             del logs[:len(logs) - 120]
+        lvl = "INFO"
+        if "❌" in msg or "失败" in msg or "错误" in msg:
+            lvl = "ERROR"
+        elif "⚠️" in msg:
+            lvl = "WARN"
+        elif "✅" in msg or "🎉" in msg or "🚀" in msg:
+            lvl = "SUCCESS"
+        self.log(lvl, "strm", msg)
 
     def start_strm_sync_task(
         self,
@@ -575,10 +742,13 @@ class GuangyapanApp:
             val = max(1, min(16, int(limit)))
         except Exception:
             val = 3
+        old_val = self.max_concurrent_downloads
         self.max_concurrent_downloads = val
         self.client.config["max_concurrent_downloads"] = val
         self.client._save_config()
         self._schedule_downloads()
+        if old_val != val:
+            self.log("INFO", "system", f"⚡ 最大同时下载任务数调整为: {self.max_concurrent_downloads}")
         return self.max_concurrent_downloads
 
     def set_file_page_size(self, page_size: int) -> int:
@@ -586,9 +756,12 @@ class GuangyapanApp:
             val = max(0, min(5000, int(page_size)))
         except Exception:
             val = 20
+        old_val = self.file_page_size
         self.file_page_size = val
         self.client.config["file_page_size"] = val
         self.client._save_config()
+        if old_val != val:
+            self.log("INFO", "system", f"📄 文件列表每页显示数量调整为: {self.file_page_size}")
         return self.file_page_size
 
     def _run_download_worker(self, task_id: str):
@@ -613,6 +786,7 @@ class GuangyapanApp:
 
             task["status"] = "getting_url"
             task["speed"] = "获取直链中..."
+            self.log("INFO", "download", f"⬇️ 开始下载任务: {task.get('fileName', '')}", f"任务ID: {task_id} | 路径: {out_path}")
             dl_info = self.client.get_download_url(file_id)
             signed_url = dl_info.get("signedURL")
             if not signed_url:
@@ -660,13 +834,16 @@ class GuangyapanApp:
                 self.downloads[task_id]["finishTime"] = time.time()
                 self.downloads[task_id]["error"] = None
                 fix_permissions(out_path)
+                self.log("SUCCESS", "download", f"✅ 下载完成: {task.get('fileName', '')}", f"保存路径: {out_path}")
             else:
                 self.downloads[task_id]["status"] = "failed"
                 self.downloads[task_id]["error"] = "下载未正常完成"
+                self.log("ERROR", "download", f"❌ 下载未完成: {task.get('fileName', '')}", f"任务ID: {task_id}")
         except Exception as e:
             if task_id in self.downloads and self.downloads[task_id].get("status") not in ("cancelled", "pending"):
                 self.downloads[task_id]["status"] = "failed"
                 self.downloads[task_id]["error"] = str(e)
+                self.log("ERROR", "download", f"❌ 下载发生异常: {task.get('fileName', '')}", f"错误: {e}")
         finally:
             self._schedule_downloads()
 
@@ -753,6 +930,7 @@ class GuangyapanApp:
 
     def start_download_task(self, file_id: str, file_name: str, target_dir: str = None, file_size: int = 0):
         task_id = self._enqueue_single_download(file_id, file_name, target_dir or self.download_dir, file_size=file_size)
+        self.log("INFO", "download", f"📥 添加下载任务: {file_name}", f"文件ID: {file_id} | 大小: {format_size(file_size) if file_size else '未知'}")
         self._schedule_downloads()
         return task_id
 
@@ -820,6 +998,7 @@ class GuangyapanApp:
                 print("Error scanning folder for batch download:", ex)
 
         self._schedule_downloads()
+        self.log("INFO", "download", f"📦 批量提交下载任务: 已加入排队 {len(queued_ids)} 个文件", f"跳过已存在: {skipped_count} | 目标目录: {base_target_dir}")
 
         if folder_queue:
             remaining = list(folder_queue)
@@ -863,6 +1042,7 @@ class GuangyapanApp:
         }
 
     def retry_download_task(self, task_id: str) -> bool:
+        fn = ""
         with self.download_queue_lock:
             t = self.downloads.get(task_id)
             if not t:
@@ -874,15 +1054,19 @@ class GuangyapanApp:
             t["eta"] = "--"
             t["error"] = None
             t["finishTime"] = None
+            fn = t.get("fileName", "")
+        self.log("INFO", "download", f"🔄 重试下载任务: {fn} (ID: {task_id})")
         self._schedule_downloads()
         return True
 
     def cancel_download_task(self, task_id: str):
         if task_id in self.downloads:
+            fn = self.downloads[task_id].get("fileName", "")
             self.downloads[task_id]["status"] = "cancelled"
             self.downloads[task_id]["speed"] = "已取消"
             self.downloads[task_id]["eta"] = "--"
             self.downloader.cancel_task(task_id)
+            self.log("WARN", "download", f"⏹️ 取消下载任务: {fn} (ID: {task_id})")
             self._schedule_downloads()
 
     def cancel_all_downloads(self) -> int:
@@ -896,6 +1080,7 @@ class GuangyapanApp:
                     to_kill.append(tid)
         for tid in to_kill:
             self.downloader.cancel_task(tid)
+        self.log("WARN", "download", f"⏹️ 取消全部下载任务: 共终止 {len(to_kill)} 个任务")
         return len(to_kill)
 
     def _remove_local_task_files(self, file_path: str) -> bool:
@@ -925,6 +1110,7 @@ class GuangyapanApp:
             if was_running:
                 time.sleep(0.2)
             file_deleted = self._remove_local_task_files(task.get("path", ""))
+        self.log("INFO", "download", f"🗑️ 移除下载任务: {task.get('fileName', '') if task else task_id}" + (" (已同步删除本地文件)" if file_deleted else ""))
         return {"deleted": bool(task), "fileDeleted": file_deleted}
 
     def clear_completed_tasks(self, delete_file: bool = False) -> dict:
@@ -940,6 +1126,7 @@ class GuangyapanApp:
             for t in removed_tasks:
                 if self._remove_local_task_files(t.get("path", "")):
                     files_deleted += 1
+        self.log("INFO", "download", f"🧹 清理已结束下载任务: 共 {len(removed_tasks)} 项" + (f" (删除本地文件 {files_deleted} 个)" if files_deleted else ""))
         return {"cleared": len(removed_tasks), "filesDeleted": files_deleted}
 
 HTML_PAGE = """<!DOCTYPE html>
@@ -2389,6 +2576,108 @@ HTML_PAGE = """<!DOCTYPE html>
         width: 100% !important;
       }
     }
+
+    /* Log Console Styles */
+    .log-console-wrap {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+      background: var(--bg-subtle);
+      padding: 12px 16px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+      font-size: 12.5px;
+      line-height: 1.6;
+    }
+    .log-console-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .log-entry {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 6px 10px;
+      border-radius: var(--radius-xs);
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      transition: background 0.15s;
+      word-break: break-all;
+    }
+    .log-entry:hover {
+      background: var(--bg-hover);
+    }
+    .log-entry-time {
+      color: var(--text-muted);
+      flex-shrink: 0;
+      font-size: 11.5px;
+      user-select: none;
+    }
+    .log-entry-cat {
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 6px;
+      border-radius: var(--radius-xs);
+      font-size: 11px;
+      font-weight: 600;
+      flex-shrink: 0;
+      user-select: none;
+    }
+    .log-cat-download { background: rgba(59, 130, 246, 0.12); color: #2563eb; }
+    .log-cat-cloud { background: rgba(168, 85, 247, 0.12); color: #9333ea; }
+    .log-cat-strm { background: rgba(249, 115, 22, 0.12); color: #ea580c; }
+    .log-cat-system { background: rgba(107, 114, 128, 0.12); color: #4b5563; }
+    body[data-theme="dark"] .log-cat-download { background: rgba(59, 130, 246, 0.25); color: #60a5fa; }
+    body[data-theme="dark"] .log-cat-cloud { background: rgba(168, 85, 247, 0.25); color: #c084fc; }
+    body[data-theme="dark"] .log-cat-strm { background: rgba(249, 115, 22, 0.25); color: #fb923c; }
+    body[data-theme="dark"] .log-cat-system { background: rgba(107, 114, 128, 0.25); color: #9ca3af; }
+
+    .log-entry-level {
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 6px;
+      border-radius: var(--radius-xs);
+      font-size: 11px;
+      font-weight: 700;
+      flex-shrink: 0;
+      user-select: none;
+    }
+    .log-level-info { background: rgba(14, 165, 233, 0.12); color: #0284c7; }
+    .log-level-success { background: rgba(34, 197, 94, 0.12); color: #16a34a; }
+    .log-level-warn { background: rgba(234, 179, 8, 0.15); color: #ca8a04; }
+    .log-level-error { background: rgba(239, 68, 68, 0.12); color: #dc2626; }
+    body[data-theme="dark"] .log-level-info { background: rgba(14, 165, 233, 0.25); color: #38bdf8; }
+    body[data-theme="dark"] .log-level-success { background: rgba(34, 197, 94, 0.25); color: #4ade80; }
+    body[data-theme="dark"] .log-level-warn { background: rgba(234, 179, 8, 0.25); color: #facc15; }
+    body[data-theme="dark"] .log-level-error { background: rgba(239, 68, 68, 0.25); color: #f87171; }
+
+    .log-entry-msg {
+      flex: 1;
+      color: var(--text-main);
+    }
+    .log-entry-details {
+      margin-top: 4px;
+      padding: 4px 8px;
+      background: var(--bg-input);
+      border-radius: var(--radius-xs);
+      font-size: 11.5px;
+      color: var(--text-secondary);
+      border-left: 2px solid var(--brand);
+    }
+    .badge-pill {
+      display: inline-block;
+      margin-left: 4px;
+      padding: 0 6px;
+      font-size: 10.5px;
+      font-weight: 600;
+      border-radius: var(--radius-full);
+      background: var(--bg-input);
+      color: var(--text-muted);
+    }
+    .subtab-btn.active .badge-pill {
+      background: var(--brand);
+      color: #fff;
+    }
   </style>
 </head>
 <body data-theme="light">
@@ -2467,6 +2756,21 @@ HTML_PAGE = """<!DOCTYPE html>
         </div>
         <span class="rail-btn-label">STRM</span>
         <span class="rail-badge dot" id="strmRunningBadge" style="display: none;"></span>
+      </div>
+
+      <div class="rail-btn" id="navLogs" onclick="switchView('logs')" title="系统运行日志">
+        <div class="rail-btn-icon">
+          <!-- Document / Terminal Logs SVG -->
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+            <polyline points="10 9 9 9 8 9"></polyline>
+          </svg>
+        </div>
+        <span class="rail-btn-label">日志</span>
+        <span class="rail-badge dot" id="logErrorBadge" style="display: none; background: #ef4444;"></span>
       </div>
 
       <div class="rail-btn" id="navTrash" onclick="switchView('trash')" title="回收站">
@@ -2955,6 +3259,52 @@ HTML_PAGE = """<!DOCTYPE html>
         </div>
       </div>
 
+      <!-- VIEW: LOGS CENTER -->
+      <div class="content-view" id="view-logs">
+        <div class="official-card">
+          <!-- Subtabs Bar & Toolbar -->
+          <div class="subtabs-bar">
+            <div class="subtabs-left">
+              <button class="subtab-btn active" id="logSubtab-all" onclick="filterLogsByCategory('all')">全部 <span class="badge-pill" id="logCount-all">0</span></button>
+              <button class="subtab-btn" id="logSubtab-download" onclick="filterLogsByCategory('download')">⬇️ 下载传输 <span class="badge-pill" id="logCount-download">0</span></button>
+              <button class="subtab-btn" id="logSubtab-cloud" onclick="filterLogsByCategory('cloud')">⚡ 云端离线 <span class="badge-pill" id="logCount-cloud">0</span></button>
+              <button class="subtab-btn" id="logSubtab-strm" onclick="filterLogsByCategory('strm')">🎬 STRM同步 <span class="badge-pill" id="logCount-strm">0</span></button>
+              <button class="subtab-btn" id="logSubtab-system" onclick="filterLogsByCategory('system')">⚙️ 系统服务 <span class="badge-pill" id="logCount-system">0</span></button>
+            </div>
+            <div class="toolbar-right" style="gap: 8px;">
+              <select class="form-select" id="logLevelSelect" onchange="onLogLevelChanged()" style="height: 32px; padding: 0 10px; font-size: 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg-input); color: var(--text-main);">
+                <option value="ALL">全部级别</option>
+                <option value="INFO">ℹ️ INFO 提示</option>
+                <option value="SUCCESS">✅ SUCCESS 成功</option>
+                <option value="WARN">⚠️ WARN 警告</option>
+                <option value="ERROR">❌ ERROR 异常</option>
+              </select>
+              <div class="search-box" style="height: 32px; width: 170px;">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input type="text" id="logSearchInput" placeholder="搜索日志..." oninput="onLogSearchInput()">
+              </div>
+              <label style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-secondary); cursor: pointer; user-select: none;">
+                <input type="checkbox" id="logAutoScrollCheck" checked onchange="toggleLogAutoScroll()">
+                <span>自动滚动</span>
+              </label>
+              <button class="btn-secondary btn-sm" onclick="loadLogs(true)" title="刷新日志" style="height: 32px; padding: 0 10px; font-size: 12px;">🔄 刷新</button>
+              <button class="btn-outline btn-sm" onclick="confirmClearLogs()" title="清空日志" style="height: 32px; padding: 0 10px; font-size: 12px;">🗑️ 清空</button>
+              <button class="btn-primary btn-sm" onclick="exportLogs()" title="导出日志为 TXT 文件" style="height: 32px; padding: 0 12px; font-size: 12px;">📥 导出TXT</button>
+            </div>
+          </div>
+
+          <!-- Log Console Body -->
+          <div id="logConsoleContainer" class="log-console-wrap">
+            <div id="logConsoleList" class="log-console-list"></div>
+            <div id="logEmptyState" style="display: none; padding: 60px 0; text-align: center; color: var(--text-muted);">
+              <div style="font-size: 28px; margin-bottom: 8px;">📜</div>
+              <div style="font-size: 14px; font-weight: 500;">暂无匹配的运行日志</div>
+              <div style="font-size: 12px; margin-top: 4px; color: var(--text-placeholder);">下载、云离线、STRM串流或系统事件触发时将实时在此记录</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- VIEW 4: RECYCLE BIN -->
       <div class="content-view" id="view-trash">
         <div class="official-card" style="display: flex; align-items: center; justify-content: center;">
@@ -3020,7 +3370,7 @@ HTML_PAGE = """<!DOCTYPE html>
             <div class="setting-card">
               <div class="setting-card-title">ℹ️ 应用介绍与更新检查</div>
               <div class="setting-card-desc">
-                当前运行版本: <strong id="aboutCurrentVersion" style="color: var(--brand);">v1.2.1</strong> · 由 <strong>chaos</strong> 专为飞牛 fnOS 深度适配打造。
+                当前运行版本: <strong id="aboutCurrentVersion" style="color: var(--brand);">v1.2.2</strong> · 由 <strong>chaos</strong> 专为飞牛 fnOS 深度适配打造。
               </div>
               <div style="background: var(--bg-input); padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); font-size: 12px; margin-bottom: 4px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; gap: 8px; flex-wrap: wrap;">
@@ -3926,6 +4276,11 @@ HTML_PAGE = """<!DOCTYPE html>
         document.getElementById("view-strm")?.classList.add("active");
         document.getElementById("breadcrumbs").innerHTML = `<span class="crumb-item current">🎬 STRM 影视库 &amp; 302 动态串流网关</span>`;
         loadStrmView(true);
+      } else if (viewName === 'logs') {
+        document.getElementById("navLogs")?.classList.add("active");
+        document.getElementById("view-logs")?.classList.add("active");
+        document.getElementById("breadcrumbs").innerHTML = `<span class="crumb-item current">📜 系统运行日志中心</span>`;
+        loadLogs(true);
       } else if (viewName === 'trash') {
         document.getElementById("navTrash")?.classList.add("active");
         document.getElementById("view-trash")?.classList.add("active");
@@ -3943,6 +4298,7 @@ HTML_PAGE = """<!DOCTYPE html>
       else if (currentView === 'transfers') loadTransfers();
       else if (currentView === 'offline') loadCloudTasks();
       else if (currentView === 'strm') loadStrmView(true);
+      else if (currentView === 'logs') loadLogs(true);
       else if (currentView === 'trash') switchView('trash');
       else if (currentView === 'settings') loadSettings();
     }
@@ -6640,6 +6996,161 @@ function escapeHtml(str) {
       }
     }
 
+    // ================= VIEW: LOGS =================
+    let activeLogCategory = 'all';
+    let activeLogLevel = 'ALL';
+    let logSearchKeyword = '';
+    let logAutoScroll = true;
+    let allLoadedLogs = [];
+    let isLogsLoading = false;
+
+    function filterLogsByCategory(cat) {
+      activeLogCategory = cat;
+      document.querySelectorAll("#view-logs .subtab-btn").forEach(b => b.classList.remove("active"));
+      document.getElementById(`logSubtab-${cat}`)?.classList.add("active");
+      renderLogs();
+    }
+
+    function onLogLevelChanged() {
+      const sel = document.getElementById("logLevelSelect");
+      if (sel) activeLogLevel = sel.value;
+      renderLogs();
+    }
+
+    function onLogSearchInput() {
+      const input = document.getElementById("logSearchInput");
+      if (input) logSearchKeyword = input.value.trim().toLowerCase();
+      renderLogs();
+    }
+
+    function toggleLogAutoScroll() {
+      const chk = document.getElementById("logAutoScrollCheck");
+      if (chk) logAutoScroll = chk.checked;
+    }
+
+    async function loadLogs(forceScroll = false) {
+      if (isLogsLoading) return;
+      isLogsLoading = true;
+      try {
+        const res = await fetch("/api/logs?category=all&level=ALL&limit=600");
+        const data = await res.json();
+        allLoadedLogs = data.logs || [];
+
+        // Update category counts
+        const cats = data.categories || {};
+        const setBadge = (id, val) => {
+          const el = document.getElementById(id);
+          if (el) el.innerText = val !== undefined ? val : 0;
+        };
+        setBadge("logCount-all", cats.all || allLoadedLogs.length);
+        setBadge("logCount-download", cats.download || 0);
+        setBadge("logCount-cloud", cats.cloud || 0);
+        setBadge("logCount-strm", cats.strm || 0);
+        setBadge("logCount-system", cats.system || 0);
+
+        renderLogs(forceScroll);
+      } catch (e) {
+        console.error("Failed to load logs:", e);
+      } finally {
+        isLogsLoading = false;
+      }
+    }
+
+    function renderLogs(forceScroll = false) {
+      const listEl = document.getElementById("logConsoleList");
+      const emptyEl = document.getElementById("logEmptyState");
+      const container = document.getElementById("logConsoleContainer");
+      if (!listEl || !container) return;
+
+      let filtered = allLoadedLogs;
+
+      // Filter category
+      if (activeLogCategory !== 'all') {
+        filtered = filtered.filter(l => (l.category || '').toLowerCase() === activeLogCategory.toLowerCase());
+      }
+
+      // Filter level
+      if (activeLogLevel !== 'ALL') {
+        filtered = filtered.filter(l => (l.level || '').toUpperCase() === activeLogLevel);
+      }
+
+      // Filter keyword
+      if (logSearchKeyword) {
+        filtered = filtered.filter(l => {
+          const m = (l.message || '').toLowerCase();
+          const d = (l.details || '').toLowerCase();
+          return m.includes(logSearchKeyword) || d.includes(logSearchKeyword);
+        });
+      }
+
+      if (filtered.length === 0) {
+        listEl.innerHTML = "";
+        if (emptyEl) emptyEl.style.display = "block";
+        return;
+      }
+
+      if (emptyEl) emptyEl.style.display = "none";
+
+      const catLabelMap = {
+        download: "下载",
+        cloud: "云端",
+        strm: "STRM",
+        system: "系统"
+      };
+
+      const html = filtered.map(item => {
+        const catClass = `log-cat-${(item.category || 'system').toLowerCase()}`;
+        const catLabel = catLabelMap[(item.category || 'system').toLowerCase()] || item.category;
+        const lvlClass = `log-level-${(item.level || 'info').toLowerCase()}`;
+        const detailsHtml = item.details ? `<div class="log-entry-details">${escapeHtml(item.details)}</div>` : '';
+        return `
+          <div class="log-entry" id="log-item-${item.id}">
+            <span class="log-entry-time">${item.time}</span>
+            <span class="log-entry-cat ${catClass}">${catLabel}</span>
+            <span class="log-entry-level ${lvlClass}">${item.level}</span>
+            <div class="log-entry-msg">
+              <div>${escapeHtml(item.message)}</div>
+              ${detailsHtml}
+            </div>
+          </div>
+        `;
+      }).join("");
+
+      listEl.innerHTML = html;
+
+      if (forceScroll || logAutoScroll) {
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    async function confirmClearLogs() {
+      if (!confirm("确定要清空当前的系统运行日志吗？")) return;
+      try {
+        const res = await fetch("/api/logs/clear", { method: "POST" });
+        const d = await res.json();
+        if (d.success) {
+          showToast("已清空系统运行日志");
+          loadLogs(true);
+        }
+      } catch (e) {
+        alert("清空日志失败: " + e.message);
+      }
+    }
+
+    function exportLogs() {
+      window.open("/api/logs/export", "_blank");
+    }
+
     // Initial load
     initTheme();
     initUser();
@@ -6647,6 +7158,7 @@ function escapeHtml(str) {
     loadSettings();
     loadCloudTasks();
     loadStrmView(true);
+    loadLogs(true);
 
     // Polling timer for active downloads & STRM sync tasks
     setInterval(() => {
@@ -6672,6 +7184,10 @@ function escapeHtml(str) {
 
       if (currentView === 'strm' || strmState.running) {
         loadStrmView(false);
+      }
+
+      if (currentView === 'logs') {
+        loadLogs(false);
       }
     }, 1500);
 
@@ -6726,9 +7242,12 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
 
         use_proxy = (query.get("proxy", ["0"])[0] in ("1", "true")) or bool(self.app.strm_config.get("use_proxy", False))
+        client_ip = self.client_address[0] if hasattr(self, "client_address") and self.client_address else "unknown"
         try:
             signed_url = self.app.get_strm_redirect_url(file_id)
+            self.app.log("INFO", "strm", f"🎬 STRM 媒体播放请求: FileID={file_id}", f"来源IP: {client_ip} | 模式: {'Proxy代理' if use_proxy else '302重定向'}")
         except Exception as e:
+            self.app.log("ERROR", "strm", f"❌ STRM 获取直链失败: FileID={file_id}", f"错误: {e}")
             self.send_error(502, f"Failed to resolve Guangyapan signed URL: {e}")
             return
 
@@ -6969,6 +7488,31 @@ class RequestHandler(BaseHTTPRequestHandler):
                 "github_url": GITHUB_REPO_URL
             })
 
+        elif path == "/api/logs":
+            cat = query.get("category", ["all"])[0]
+            lvl = query.get("level", ["ALL"])[0]
+            kw = query.get("keyword", [""])[0]
+            try:
+                limit = int(query.get("limit", [300])[0] or 300)
+            except Exception:
+                limit = 300
+            try:
+                since_id = int(query.get("since_id", [0])[0] or 0)
+            except Exception:
+                since_id = 0
+            res = self.app.logger.get_logs(category=cat, level=lvl, keyword=kw, limit=limit, since_id=since_id)
+            self._send_json(res)
+
+        elif path == "/api/logs/export":
+            text = self.app.logger.export_text()
+            body = text.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Disposition", f'attachment; filename="guangyapan_logs_{time.strftime("%Y%m%d_%H%M%S")}.txt"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         elif path == "/api/version/check":
             force_refresh = query.get("force", ["0"])[0] in ("1", "true")
             now = time.time()
@@ -7120,18 +7664,30 @@ class RequestHandler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(content_length).decode("utf-8")) if content_length > 0 else {}
             device_code = body.get("device_code", "")
             res = self.app.client.poll_device_token(device_code)
+            if res.get("status") == "success":
+                self.app.log("SUCCESS", "system", "🔑 用户扫码授权成功登录网盘")
             self._send_json(res)
             return
 
         elif path == "/api/auth/token-login":
             body = json.loads(self.rfile.read(content_length).decode("utf-8")) if content_length > 0 else {}
             res = self.app.client.login_with_tokens(body.get("access_token", ""), body.get("refresh_token", ""))
+            if res.get("code") == 0:
+                self.app.log("SUCCESS", "system", "🔑 用户使用 Token 成功登录网盘")
+            else:
+                self.app.log("WARN", "system", "❌ 用户 Token 登录失败", f"错误: {res.get('msg')}")
             self._send_json(res)
             return
 
         elif path == "/api/auth/logout":
             self.app.client.logout()
+            self.app.log("INFO", "system", "🚪 用户退出网盘账号登录")
             self._send_json({"code": 0, "msg": "已退出登录"})
+            return
+
+        elif path == "/api/logs/clear":
+            self.app.logger.clear()
+            self._send_json({"success": True})
             return
 
         elif path == "/api/settings":
@@ -7374,8 +7930,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                     file_indexes=file_indexes,
                     new_name=new_name
                 )
+                self.app.log("SUCCESS", "cloud", f"⚡ 提交磁力离线任务成功: {new_name or '磁力链接'}", f"链接: {(magnet or '')[:60]}...")
                 self._send_json(res)
             except Exception as e:
+                self.app.log("ERROR", "cloud", f"❌ 提交磁力离线任务失败: {new_name or '磁力链接'}", f"错误: {e}")
                 self._send_json({"error": str(e)}, 500)
 
         elif path == "/api/cloud-add/torrent":
@@ -7429,8 +7987,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                     file_indexes=file_indexes,
                     new_name=new_name
                 )
+                self.app.log("SUCCESS", "cloud", f"⚡ 提交种子离线任务成功: {new_name or filename}")
                 self._send_json(res)
             except Exception as e:
+                self.app.log("ERROR", "cloud", f"❌ 提交种子离线任务失败: {new_name or filename}", f"错误: {e}")
                 self._send_json({"error": str(e)}, 500)
 
         elif path == "/api/cloud-add/delete":
@@ -7439,8 +7999,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             delete_file = body.get("deleteFile", False)
             try:
                 res = self.app.client.delete_cloud_task(task_id, delete_file=delete_file)
+                self.app.log("INFO", "cloud", f"🗑️ 移除云端离线任务 (ID: {task_id})" + (" (同步删除网盘文件)" if delete_file else ""))
                 self._send_json(res)
             except Exception as e:
+                self.app.log("ERROR", "cloud", f"❌ 移除云端离线任务失败 (ID: {task_id})", f"错误: {e}")
                 self._send_json({"error": str(e)}, 500)
 
         elif path == "/api/cloud-add/retry":
@@ -7448,8 +8010,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             task_id = body.get("taskId")
             try:
                 res = self.app.client.retry_cloud_task(task_id)
+                self.app.log("INFO", "cloud", f"🔄 重试云端离线任务 (ID: {task_id})")
                 self._send_json(res)
             except Exception as e:
+                self.app.log("ERROR", "cloud", f"❌ 重试云端离线任务失败 (ID: {task_id})", f"错误: {e}")
                 self._send_json({"error": str(e)}, 500)
 
         elif path == "/api/cloud-add/pause":
@@ -7457,14 +8021,17 @@ class RequestHandler(BaseHTTPRequestHandler):
             task_id = body.get("taskId")
             try:
                 res = self.app.client.pause_cloud_task(task_id)
+                self.app.log("INFO", "cloud", f"⏸️ 暂停云端离线任务 (ID: {task_id})")
                 self._send_json(res)
             except Exception as e:
+                self.app.log("ERROR", "cloud", f"❌ 暂停云端离线任务失败 (ID: {task_id})", f"错误: {e}")
                 self._send_json({"error": str(e)}, 500)
 
         elif path == "/api/create-folder":
             body = json.loads(self.rfile.read(content_length).decode("utf-8"))
             try:
                 res = self.app.client.create_folder(body["name"], body.get("parentId", ""))
+                self.app.log("INFO", "system", f"📁 创建网盘新文件夹: {body.get('name', '')}")
                 self._send_json(res)
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
@@ -7476,6 +8043,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 if res.get("code") != 0 and res.get("code") is not None:
                     self._send_json({"error": res.get("msg") or f"删除失败 (错误码: {res.get('code')})"}, 400)
                 else:
+                    self.app.log("INFO", "system", f"🗑️ 网盘文件移入回收站 (ID: {body.get('fileId', '')})")
                     self._send_json({"status": "success", "msg": "删除成功", **res})
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
@@ -7514,8 +8082,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 with open(temp_path, "wb") as f:
                     f.write(file_bytes)
                 res = self.app.client.upload_file(temp_path, parent_id=parent_id, custom_name=filename)
+                self.app.log("SUCCESS", "system", f"⬆️ 成功上传本地文件至网盘: {filename}")
                 self._send_json(res)
             except Exception as e:
+                self.app.log("ERROR", "system", f"❌ 上传文件至网盘失败: {filename}", f"错误: {e}")
                 self._send_json({"error": str(e)}, 500)
             finally:
                 if os.path.exists(temp_path):
