@@ -5,13 +5,14 @@ import re
 import glob
 import socket
 import threading
+import uuid
 import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from .client import GuangyapanClient
 from .downloader import FileDownloader, fix_permissions, format_size, format_speed
 
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.2.3"
 GITHUB_REPO_URL = "https://github.com/lawzhougc/guangyapan-fnos"
 _VERSION_CACHE = {"last_check": 0, "data": None}
 
@@ -290,6 +291,10 @@ class GuangyapanApp:
         self.downloads = {}
         self.download_queue_lock = threading.Lock()
         self._task_seq = 0
+
+        # Upload tasks state
+        self.upload_tasks = {}
+        self.upload_lock = threading.Lock()
         saved_concurrency = self.client.config.get("max_concurrent_downloads", 3)
         try:
             self.max_concurrent_downloads = max(1, min(16, int(saved_concurrency or 3)))
@@ -381,6 +386,88 @@ class GuangyapanApp:
             fix_permissions(self.download_dir)
         except Exception:
             pass
+
+    def start_upload_task(self, file_path: str, parent_id: str = "", custom_name: str = None, is_temp: bool = False) -> str:
+        upload_id = "up_" + str(int(time.time() * 1000)) + "_" + uuid.uuid4().hex[:6]
+        file_name = custom_name or os.path.basename(file_path)
+        file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+
+        task = {
+            "id": upload_id,
+            "fileName": file_name,
+            "filePath": file_path,
+            "fileSize": file_size,
+            "parentId": parent_id or "",
+            "status": "running",
+            "stage": "hashing",
+            "stageText": "正在计算特征哈希 (GCID / CID)...",
+            "percent": 0,
+            "uploadedBytes": 0,
+            "totalBytes": file_size,
+            "isInstant": False,
+            "result": None,
+            "error": None,
+            "startTime": time.time(),
+            "finishTime": None
+        }
+
+        with self.upload_lock:
+            self.upload_tasks[upload_id] = task
+
+        def _worker():
+            def _progress(info):
+                stage = info.get("stage")
+                with self.upload_lock:
+                    if stage == "hash_ready":
+                        task["stage"] = "flash_checking"
+                        task["stageText"] = "哈希就绪，正在检查秒传..."
+                        task["percent"] = 15
+                    elif stage == "completed" and info.get("instant"):
+                        task["stage"] = "completed"
+                        task["stageText"] = "⚡ 秒传成功，文件已直接入库！"
+                        task["percent"] = 100
+                        task["isInstant"] = True
+                    elif stage == "uploading":
+                        task["stage"] = "uploading"
+                        pct = info.get("percent", 0)
+                        task["percent"] = max(15, min(95, pct))
+                        task["uploadedBytes"] = info.get("uploaded", 0)
+                        task["totalBytes"] = info.get("total", file_size)
+                        task["stageText"] = f"正在上传至阿里云 OSS: {pct}%"
+                    elif stage == "verifying":
+                        task["stage"] = "verifying"
+                        task["stageText"] = "数据推送完成，云端校验建档中..."
+                        task["percent"] = 98
+
+            try:
+                self.log("INFO", "system", f"⬆️ 开始上传文件至网盘: {file_name} (大小: {format_size(file_size)}, 目标父目录ID: '{parent_id or '根目录'}')")
+                res = self.client.upload_file(file_path, parent_id=parent_id, custom_name=file_name, progress_callback=_progress)
+                with self.upload_lock:
+                    task["status"] = "completed"
+                    task["percent"] = 100
+                    task["finishTime"] = time.time()
+                    task["result"] = res
+                    if not task.get("isInstant"):
+                        task["stage"] = "completed"
+                        task["stageText"] = "✅ 实体文件上传成功！"
+                self.log("SUCCESS", "system", f"⬆️ 成功上传文件至网盘: {file_name}")
+            except Exception as e:
+                with self.upload_lock:
+                    task["status"] = "failed"
+                    task["stage"] = "failed"
+                    task["finishTime"] = time.time()
+                    task["error"] = str(e)
+                    task["stageText"] = f"❌ 上传失败: {e}"
+                self.log("ERROR", "system", f"❌ 上传文件至网盘失败: {file_name}", f"错误: {e}")
+            finally:
+                if is_temp and os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                    except Exception:
+                        pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return upload_id
 
     # ================= STRM Gateway & Sync Engine Methods =================
     def save_strm_config(self, new_cfg: dict) -> dict:
@@ -2254,14 +2341,16 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     .modal-body {
-      padding: 20px 24px;
+      padding: 18px 24px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 14px;
       font-size: 13px;
       color: var(--text-regular);
       box-sizing: border-box;
+      flex: 1;
+      min-height: 0;
     }
 
     .modal-footer {
@@ -2273,6 +2362,26 @@ HTML_PAGE = """<!DOCTYPE html>
       gap: 10px;
       background: var(--bg-subtle);
       flex-shrink: 0;
+    }
+
+    @media (max-height: 620px) {
+      .modal-backdrop {
+        padding: 8px !important;
+      }
+      .modal {
+        max-height: 96vh !important;
+        border-radius: var(--radius-md) !important;
+      }
+      .modal-header {
+        padding: 10px 18px !important;
+      }
+      .modal-body {
+        padding: 10px 16px !important;
+        gap: 8px !important;
+      }
+      .modal-footer {
+        padding: 8px 16px !important;
+      }
     }
 
     /* Form Controls */
@@ -2776,8 +2885,8 @@ HTML_PAGE = """<!DOCTYPE html>
       <div class="rail-btn" id="navTrash" onclick="switchView('trash')" title="回收站">
         <div class="rail-btn-icon">
           <!-- Official TabbarRecycle SVG -->
-          <svg width="20" height="20" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M16.5 3.25a.75.75 0 0 1 0 1.5h-.765l-1.164 9.439a3.76 3.76 0 0 1-3.733 3.311H7.133a3.76 3.76 0 0 1-3.735-3.322L2.264 4.75H1.5a.75.75 0 0 1 0-1.5zM7.241 9.613a.6.6 0 0 0-.833.16l-.686 1.01a1.1 1.1 0 0 0 .92 1.717l1.445-.014a.601.601 0 0 0-.012-1.2l-1.254.012.5"/>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 6h18m-2 0v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6m3 0V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2m-6 5v6m4-6v6"/>
           </svg>
         </div>
         <span class="rail-btn-label">回收站</span>
@@ -2862,8 +2971,8 @@ HTML_PAGE = """<!DOCTYPE html>
       <div class="header-right">
         <!-- Storage Capsule -->
         <div class="storage-capsule" title="云盘存储空间">
-          <svg width="15" height="15" viewBox="0 0 18 18" fill="none" style="color: var(--brand);">
-            <path fill="currentColor" d="M8.475 1.538c2.784.016 5.167 1.846 5.977 4.499a5.25 5.25 0 0 1 3.292 5.13q.005.123.006.246a.75.75 0 0 1-.06.294 5.25 5.25 0 0 1-4.79 4.438 1 1 0 0 1-.15.016h-.187a2 2 0 0 1-.127 0H4.75a.8.8 0 0 1-.16-.019A4.748 4.748 0 0 1 2.27 7.528c.24-3.446 2.875-6.01 6.206-5.99m-.01 1.5c-2.575-.015-4.673 2.03-4.714 4.92a.75.75 0 0 1-.375.64 3.248 3.248 0 0 0 1.42 6.057q.018.002.03"/>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand);">
+            <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
           </svg>
           <span id="quotaText">-- / --</span>
           <div class="storage-bar-wrap">
@@ -3145,7 +3254,7 @@ HTML_PAGE = """<!DOCTYPE html>
               <div>
                 <label style="font-size: 12.5px; font-weight: 600; color: var(--text-main); display: block; margin-bottom: 6px;">3. STRM 局域网/外网播放网关地址：</label>
                 <div style="display: flex; gap: 8px;">
-                  <input type="text" class="form-input" id="strmBaseUrlInput" style="flex: 1; font-family: monospace;" placeholder="http://192.168.31.186:8998">
+                  <input type="text" class="form-input" id="strmBaseUrlInput" style="flex: 1; font-family: monospace;" placeholder="http://192.168.x.x:8998">
                   <button class="btn-secondary" onclick="autoFillStrmBaseUrl()" style="flex-shrink: 0;" title="自动填入检测到的 NAS 局域网 IP">🔄 自动获取IP</button>
                 </div>
                 <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px;">请勿填写 127.0.0.1，应使用 NAS 局域网 IP 或反代域名，确保电视/手机/Docker 均可访问。</div>
@@ -3307,11 +3416,75 @@ HTML_PAGE = """<!DOCTYPE html>
 
       <!-- VIEW 4: RECYCLE BIN -->
       <div class="content-view" id="view-trash">
-        <div class="official-card" style="display: flex; align-items: center; justify-content: center;">
-          <div class="empty-container">
-            <img src="/empty.png" class="empty-duck-img" alt="回收站">
-            <div class="empty-title">回收站就绪</div>
-            <div class="empty-sub">官方云端回收站已配置完成，可前往客户端进一步管理</div>
+        <div class="official-card">
+          <!-- Toolbar -->
+          <div class="toolbar" style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div class="toolbar-left" style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <button class="btn-primary" id="trashBatchRestoreBtn" onclick="batchRestoreTrash()" disabled title="将勾选的文件或文件夹还原恢复至原网盘目录">
+                <span>♻️ 还原选中项 (<span id="trashSelectedRestoreCount">0</span>)</span>
+              </button>
+              <button class="btn-danger" id="trashBatchDeleteBtn" onclick="batchDeleteTrash()" disabled title="彻底删除勾选的项目，无法撤销">
+                <span>🗑️ 彻底删除 (<span id="trashSelectedDeleteCount">0</span>)</span>
+              </button>
+              <button class="btn-secondary" onclick="confirmClearTrash()" title="一键清空回收站内的所有文件与文件夹">
+                <span>🧹 清空回收站</span>
+              </button>
+              <span style="font-size: 12px; color: var(--text-muted); display: inline-flex; align-items: center; gap: 4px;">
+                <span>💡 文件保留约 100 天后自动清理</span>
+              </span>
+            </div>
+
+            <div class="toolbar-right" style="display: flex; align-items: center; gap: 10px;">
+              <div class="search-box">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-muted);">
+                  <circle cx="11" cy="11" r="8"/>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                </svg>
+                <input type="text" id="trashSearchInput" placeholder="搜索回收站文件..." oninput="handleTrashSearch(this.value)">
+              </div>
+              <button class="btn-secondary" onclick="loadTrashFiles(true)" title="刷新回收站列表">
+                <span>🔄 刷新</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Trash Table Container -->
+          <div class="file-table-wrap" id="trashTableWrap" style="flex: 1; overflow-y: auto;">
+            <table class="file-table">
+              <thead>
+                <tr>
+                  <th style="width: 44px; text-align: center;">
+                    <input type="checkbox" id="selectAllTrashCheck" onchange="toggleSelectAllTrash(this.checked)" style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--brand);">
+                  </th>
+                  <th>文件名</th>
+                  <th style="width: 130px;">大小</th>
+                  <th style="width: 170px;">删除时间</th>
+                  <th style="width: 130px;">剩余保留</th>
+                  <th style="width: 180px; text-align: right; padding-right: 20px;">操作</th>
+                </tr>
+              </thead>
+              <tbody id="trashTableBody">
+                <tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 50px;">正在加载回收站文件...</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Empty State -->
+          <div id="trashEmptyContainer" style="display: none; padding: 60px 0; text-align: center;">
+            <img src="/empty.png" class="empty-duck-img" alt="回收站空空如也">
+            <div class="empty-title">回收站空空如也</div>
+            <div class="empty-sub">没有被删除的文件，所有云盘数据均安全在库</div>
+          </div>
+
+          <!-- Trash Footer Info Bar -->
+          <div class="file-pagination-bar" id="trashFooterBar">
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <span id="trashTotalInfo" style="color: var(--text-secondary); font-weight: 500;">共 0 项</span>
+              <span id="trashSelectedInfo" style="color: var(--brand); font-weight: 600; font-size: 12px; display: none;">已选中 0 项</span>
+            </div>
+            <div style="font-size: 12px; color: var(--text-dim);">
+              提示：还原后文件将直接放回其原本所在的网盘文件夹中
+            </div>
           </div>
         </div>
       </div>
@@ -3370,7 +3543,7 @@ HTML_PAGE = """<!DOCTYPE html>
             <div class="setting-card">
               <div class="setting-card-title">ℹ️ 应用介绍与更新检查</div>
               <div class="setting-card-desc">
-                当前运行版本: <strong id="aboutCurrentVersion" style="color: var(--brand);">v1.2.2</strong> · 由 <strong>chaos</strong> 专为飞牛 fnOS 深度适配打造。
+                当前运行版本: <strong id="aboutCurrentVersion" style="color: var(--brand);">v1.2.3</strong> · 由 <strong>chaos</strong> 专为飞牛 fnOS 深度适配打造。
               </div>
               <div style="background: var(--bg-input); padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); font-size: 12px; margin-bottom: 4px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; gap: 8px; flex-wrap: wrap;">
@@ -3522,7 +3695,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
   <!-- Modal: NAS Folder Picker (Enhanced with All Shares & Intelligent Navigation) -->
   <div class="modal-backdrop" id="folderPickerModal">
-    <div class="modal" style="width: 660px; max-width: 95vw;">
+    <div class="modal" style="width: 660px; max-width: 95vw; height: 85vh; max-height: 520px;">
       <div class="modal-header">
         <div class="modal-title">
           <span>📂</span>
@@ -3531,36 +3704,77 @@ HTML_PAGE = """<!DOCTYPE html>
         <button class="close-btn" onclick="closeModal('folderPickerModal')">&times;</button>
       </div>
       
-      <div class="modal-body" style="padding: 16px 24px; gap: 10px;">
+      <div class="modal-body" style="padding: 14px 20px; gap: 10px; display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden;">
         <!-- Breadcrumb navigation -->
-        <div id="folderPickerBreadcrumbs" style="display: flex; align-items: center; gap: 4px; font-size: 12.5px; overflow-x: auto; white-space: nowrap; padding: 2px 0; color: var(--text-muted);">
+        <div id="folderPickerBreadcrumbs" style="display: flex; align-items: center; gap: 4px; font-size: 12.5px; overflow-x: auto; white-space: nowrap; padding: 2px 0; color: var(--text-muted); flex-shrink: 0;">
           <!-- populated by js -->
         </div>
 
         <!-- Quick Shortcuts -->
-        <div style="display: flex; gap: 6px; overflow-x: auto; white-space: nowrap;">
-          <button class="btn-secondary btn-sm" onclick="loadFolderPickerList('')">🏠 全部共享文件夹与存储卷</button>
-          <button class="btn-secondary btn-sm" onclick="loadFolderPickerList(defaultDownloadDir)">📦 当前默认下载目录</button>
+        <div style="display: flex; gap: 8px; overflow-x: auto; white-space: nowrap; flex-shrink: 0; padding-bottom: 2px;">
+          <button class="btn-secondary btn-sm" onclick="loadFolderPickerList('')" style="display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; height: 30px; font-size: 12px; padding: 0 12px; border-radius: 6px;">🏠 全部共享文件夹与存储卷</button>
+          <button class="btn-secondary btn-sm" onclick="loadFolderPickerList(defaultDownloadDir)" style="display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; height: 30px; font-size: 12px; padding: 0 12px; border-radius: 6px;">📦 当前默认下载目录</button>
         </div>
 
-        <div style="display: flex; gap: 8px; align-items: center;">
-          <input type="text" id="folderPickerCurrentPath" readonly style="flex: 1; font-family: monospace; font-size: 12.5px; height: 34px; padding: 0 10px; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-main);" placeholder="当前选定路径...">
-          <button class="btn-secondary btn-sm" onclick="folderPickerGoUp()" style="height: 34px; padding: 0 12px;">⬆️ 上一级</button>
-          <button class="btn-primary btn-sm" onclick="folderPickerMkdir()" style="height: 34px; padding: 0 12px;">➕ 新建子文件夹</button>
+        <div style="display: flex; gap: 8px; align-items: center; flex-shrink: 0;">
+          <input type="text" id="folderPickerCurrentPath" readonly style="flex: 1; font-family: monospace; font-size: 12.5px; height: 32px; padding: 0 10px; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-main);" placeholder="当前选定路径...">
+          <button class="btn-secondary btn-sm" onclick="folderPickerGoUp()" style="height: 32px; padding: 0 10px;">⬆️ 上一级</button>
+          <button class="btn-primary btn-sm" onclick="folderPickerMkdir()" style="height: 32px; padding: 0 10px;">➕ 新建子文件夹</button>
         </div>
 
-        <div class="fs-browser-list" id="folderPickerList" style="min-height: 220px; max-height: 340px;">
+        <div class="fs-browser-list" id="folderPickerList" style="flex: 1; min-height: 100px; overflow-y: auto;">
           <!-- populated by js -->
         </div>
       </div>
 
-      <div class="modal-footer" style="padding: 14px 24px; display: flex; justify-content: space-between; align-items: center;">
+      <div class="modal-footer" style="padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
         <div style="font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 380px;">
           选定: <span id="folderPickerFooterPath" style="color: var(--primary); font-family: monospace;">--</span>
         </div>
         <div style="display: flex; gap: 8px;">
           <button class="btn-secondary" onclick="closeModal('folderPickerModal')">取消</button>
           <button class="btn-primary" onclick="confirmFolderPicker()">确定选择该目录</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: NAS File Picker (选择 NAS 上的文件) -->
+  <div class="modal-backdrop" id="nasFilePickerModal" style="z-index: 1060;">
+    <div class="modal" style="width: 700px; max-width: 95vw; height: 85vh; max-height: 520px;">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span>🖥️</span>
+          <span>选择 NAS 上的文件</span>
+        </div>
+        <button class="close-btn" onclick="closeModal('nasFilePickerModal')">&times;</button>
+      </div>
+      
+      <div class="modal-body" style="padding: 14px 20px; gap: 10px; display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden;">
+        <!-- Breadcrumbs -->
+        <div id="nasFilePickerBreadcrumbs" style="display: flex; align-items: center; gap: 4px; font-size: 12.5px; overflow-x: auto; white-space: nowrap; padding: 2px 0; color: var(--text-muted); flex-shrink: 0;">
+          <!-- populated by js -->
+        </div>
+
+        <!-- Quick Shortcuts -->
+        <div style="display: flex; gap: 8px; overflow-x: auto; white-space: nowrap; flex-shrink: 0; padding-bottom: 2px;">
+          <button type="button" class="btn-secondary btn-sm" onclick="loadNasFilePickerList('')" style="display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; height: 30px; font-size: 12px; padding: 0 12px; border-radius: 6px;">🏠 全部共享文件夹与存储卷</button>
+          <button type="button" class="btn-secondary btn-sm" onclick="loadNasFilePickerList(defaultDownloadDir)" style="display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; height: 30px; font-size: 12px; padding: 0 12px; border-radius: 6px;">📦 默认下载目录</button>
+        </div>
+
+        <!-- Browser List (folders & files) -->
+        <div class="fs-browser-list" id="nasFilePickerList" style="flex: 1; min-height: 100px; overflow-y: auto;">
+          <!-- populated by js -->
+        </div>
+      </div>
+
+      <div class="modal-footer" style="padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
+        <div style="font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px;">
+          选定文件: <span id="nasFilePickerFooterPath" style="color: var(--primary); font-family: monospace; font-weight: 600;">未选择</span>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button type="button" class="btn-secondary" onclick="closeModal('nasFilePickerModal')">取消</button>
+          <button type="button" class="btn-primary" id="confirmNasFilePickerBtn" onclick="confirmNasFilePicker()" disabled>确定选择此文件</button>
         </div>
       </div>
     </div>
@@ -3679,40 +3893,40 @@ HTML_PAGE = """<!DOCTYPE html>
 
   <!-- Modal: Cloud Drive Destination Folder Picker (保存到 - 复刻光鸭网页版树状目录) -->
   <div class="modal-backdrop" id="cloudFolderPickerModal" style="z-index: 1050;">
-    <div class="modal" style="width: 560px; max-width: 95vw; border-radius: 14px; padding: 22px;">
+    <div class="modal" style="width: 560px; max-width: 95vw; height: 85vh; max-height: 520px; border-radius: 14px; padding: 16px 20px; display: flex; flex-direction: column;">
       <!-- Header -->
-      <div class="modal-header" style="border-bottom: 1px solid var(--border-subtle); padding-bottom: 14px; margin-bottom: 14px;">
+      <div class="modal-header" style="border-bottom: 1px solid var(--border-subtle); padding: 0 0 10px 0; margin-bottom: 10px; flex-shrink: 0;">
         <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px;">
           <span style="font-size: 18px;">☁️</span>
-          <span>保存到</span>
+          <span>保存到网盘目录</span>
         </div>
         <button class="close-btn" onclick="closeModal('cloudFolderPickerModal')">&times;</button>
       </div>
 
       <!-- Current Location & Restore Default Row -->
-      <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px;">
-        <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; font-size: 13px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-shrink: 0;">
+        <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 12.5px;">
           <span style="color: var(--text-dim); flex-shrink: 0;">当前位置：</span>
           <span id="cloudTreeCurrentPath" style="color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1;">全部文件/来自: 云添加</span>
           <span id="cloudTreeDefaultBadge" class="cloud-tree-tag-default">默认</span>
         </div>
-        <button type="button" class="btn-secondary" onclick="restoreDefaultCloudFolderTree()" style="padding: 7px 14px; font-size: 12.5px; flex-shrink: 0; border-radius: 8px;">恢复默认</button>
+        <button type="button" class="btn-secondary btn-sm" onclick="restoreDefaultCloudFolderTree()" style="padding: 6px 12px; font-size: 12px; flex-shrink: 0; border-radius: 6px;">恢复默认</button>
       </div>
 
       <!-- Tree Container -->
-      <div id="cloudFolderTreeContainer" class="cloud-tree-container">
+      <div id="cloudFolderTreeContainer" class="cloud-tree-container" style="flex: 1; min-height: 120px; overflow-y: auto;">
         <!-- Rendered by JS -->
       </div>
 
       <!-- Footer Buttons -->
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px; border-top: 1px solid var(--border-subtle); padding-top: 14px;">
-        <button type="button" class="btn-secondary" onclick="promptCreateFolderInTree()" style="display: flex; align-items: center; gap: 6px; padding: 8px 14px; font-size: 13px; border-radius: 8px;">
-          <span style="font-size: 15px;">📁⁺</span>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px; border-top: 1px solid var(--border-subtle); padding-top: 12px; flex-shrink: 0;">
+        <button type="button" class="btn-secondary btn-sm" onclick="promptCreateFolderInTree()" style="display: flex; align-items: center; gap: 6px; padding: 7px 12px; font-size: 12.5px; border-radius: 6px;">
+          <span style="font-size: 14px;">📁⁺</span>
           <span>新建文件夹</span>
         </button>
-        <div style="display: flex; gap: 10px;">
-          <button type="button" class="btn-secondary" onclick="closeModal('cloudFolderPickerModal')" style="padding: 8px 20px; font-size: 13px; border-radius: 8px;">取消</button>
-          <button type="button" class="btn-primary" onclick="confirmCloudFolderTreeSelection()" style="padding: 8px 24px; font-size: 13px; border-radius: 8px; font-weight: 600;">确定</button>
+        <div style="display: flex; gap: 8px;">
+          <button type="button" class="btn-secondary btn-sm" onclick="closeModal('cloudFolderPickerModal')" style="padding: 7px 16px; font-size: 12.5px; border-radius: 6px;">取消</button>
+          <button type="button" class="btn-primary btn-sm" onclick="confirmCloudFolderTreeSelection()" style="padding: 7px 20px; font-size: 12.5px; border-radius: 6px; font-weight: 600;">确定</button>
         </div>
       </div>
     </div>
@@ -3818,7 +4032,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
   <!-- Modal: Upload -->
   <div class="modal-backdrop" id="uploadModal">
-    <div class="modal" style="width: 560px; max-width: 95vw;">
+    <div class="modal" style="width: 580px; max-width: 95vw;">
       <div class="modal-header">
         <div class="modal-title">
           <span>⬆️</span>
@@ -3827,22 +4041,93 @@ HTML_PAGE = """<!DOCTYPE html>
         <button class="close-btn" onclick="closeModal('uploadModal')">&times;</button>
       </div>
       
-      <div class="modal-body" style="padding: 20px 24px; gap: 16px;">
-        <p style="font-size: 12.5px; color: var(--text-muted); margin: 0; line-height: 1.5;">支持极速秒传 (基于迅雷哈希算法)，未命中时直传阿里云 OSS</p>
-        
-        <div class="dropzone" onclick="document.getElementById('uploadFileInput').click()" style="padding: 32px 20px; border: 2px dashed var(--border); border-radius: 12px; background: var(--bg-input); cursor: pointer; text-align: center; transition: all 0.2s;">
-          <div style="font-size: 32px; margin-bottom: 8px;">📤</div>
-          <p id="uploadFileNameText" style="font-size: 13.5px; font-weight: 500; color: var(--text-main); margin: 0;">点击选择或拖拽文件到此处</p>
-          <input type="file" id="uploadFileInput" style="display: none;" onchange="handleUploadSelect(this)">
+      <div class="modal-body" style="padding: 18px 24px; gap: 14px;">
+        <!-- Destination Cloud Folder Picker Row -->
+        <div style="background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+          <div style="display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;">
+            <span style="font-size: 20px; flex-shrink: 0;">📁</span>
+            <div style="min-width: 0; flex: 1;">
+              <div style="font-size: 11px; color: var(--text-muted); line-height: 1.2;">保存到网盘目录：</div>
+              <div id="uploadTargetFolderText" style="font-size: 13px; font-weight: 600; color: var(--primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px;">全部文件</div>
+            </div>
+          </div>
+          <button type="button" class="btn-secondary btn-sm" onclick="chooseUploadCloudFolder()" style="flex-shrink: 0; padding: 5px 12px; font-size: 12px; display: flex; align-items: center; gap: 4px; border-radius: 6px;">
+            <span>📂</span>
+            <span>更改目录</span>
+          </button>
         </div>
 
-        <div id="uploadProgressSection" style="display: none;">
-          <div class="task-details" style="margin-bottom: 6px;">
-            <span id="uploadStatusLabel">准备中...</span>
-            <span id="uploadPctLabel">0%</span>
+        <!-- Source Mode Tabs -->
+        <div class="subtabs" style="margin: 0; padding: 0;">
+          <div class="subtabs-left" style="width: 100%;">
+            <button class="subtab-btn active" id="tabUploadNasBtn" onclick="switchUploadTab('nas')" style="flex: 1; text-align: center;">🖥️ NAS 磁盘文件（推荐）</button>
+            <button class="subtab-btn" id="tabUploadBrowserBtn" onclick="switchUploadTab('browser')" style="flex: 1; text-align: center;">💻 本机电脑文件</button>
           </div>
-          <div class="progress-bar-bg">
-            <div class="progress-bar-fill" id="uploadProgressBar"></div>
+        </div>
+
+        <!-- Tab 1: NAS Storage File -->
+        <div id="uploadSectionNas" style="display: flex; flex-direction: column; gap: 8px;">
+          <!-- Selected NAS file card -->
+          <div id="uploadNasSelectedCard" style="display: none; padding: 10px 12px; background: var(--bg-card); border: 1px solid var(--primary); border-radius: 10px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+              <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
+                <span id="uploadNasFileIcon" style="font-size: 24px; flex-shrink: 0;">📄</span>
+                <div style="min-width: 0; flex: 1;">
+                  <div id="uploadNasFileName" style="font-size: 13px; font-weight: 600; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">--</div>
+                  <div style="display: flex; gap: 12px; font-size: 11px; color: var(--text-muted); margin-top: 2px;">
+                    <span>大小: <strong id="uploadNasFileSize" style="color: var(--text-main);">--</strong></span>
+                    <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 250px;" id="uploadNasFilePath">/vol1/...</span>
+                  </div>
+                </div>
+              </div>
+              <button type="button" class="btn-secondary btn-sm" onclick="openNasFilePickerModal(handleNasFileChosen)" style="flex-shrink: 0; padding: 4px 10px; font-size: 12px;">重新选择</button>
+            </div>
+          </div>
+
+          <!-- Empty state button trigger -->
+          <div id="uploadNasEmptyCard" onclick="openNasFilePickerModal(handleNasFileChosen)" style="padding: 16px 14px; border: 2px dashed var(--border); border-radius: 10px; background: var(--bg-input); cursor: pointer; text-align: center; transition: all 0.2s;">
+            <div style="font-size: 26px; margin-bottom: 4px;">🖥️</div>
+            <p style="font-size: 13px; font-weight: 600; color: var(--text-main); margin: 0 0 2px 0;">点击从 NAS 存储中浏览选择文件</p>
+            <span style="font-size: 11px; color: var(--text-muted);">直接利用 NAS 高速本地磁盘读取与网络直传，无需经过个人电脑中转</span>
+          </div>
+
+          <!-- Manual Path Input -->
+          <div style="display: flex; gap: 6px; align-items: center; margin-top: 2px;">
+            <input type="text" id="uploadNasManualPath" placeholder="或直接输入/粘贴 NAS 绝对路径，如 /vol1/1000/movie.mkv" oninput="handleNasManualPathChange(this.value)" style="flex: 1; height: 32px; font-size: 12px; font-family: monospace; padding: 0 10px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; color: var(--text-main);">
+            <button type="button" class="btn-secondary btn-sm" onclick="openNasFilePickerModal(handleNasFileChosen)" style="height: 32px; padding: 0 10px; font-size: 12px; flex-shrink: 0;">📂 浏览 NAS</button>
+          </div>
+        </div>
+
+        <!-- Tab 2: Browser Local File -->
+        <div id="uploadSectionBrowser" style="display: none; flex-direction: column; gap: 8px;">
+          <div class="dropzone" onclick="document.getElementById('uploadFileInput').click()" style="padding: 18px 14px; border: 2px dashed var(--border); border-radius: 10px; background: var(--bg-input); cursor: pointer; text-align: center; transition: all 0.2s;">
+            <div style="font-size: 26px; margin-bottom: 4px;">📤</div>
+            <p id="uploadFileNameText" style="font-size: 13px; font-weight: 500; color: var(--text-main); margin: 0;">点击选择或拖拽本机电脑文件到此处</p>
+            <span style="font-size: 11px; color: var(--text-muted); display: block; margin-top: 2px;">通过浏览器上传到 NAS 后再入库光鸭网盘</span>
+            <input type="file" id="uploadFileInput" style="display: none;" onchange="handleUploadSelect(this)">
+          </div>
+
+          <!-- Staging folder notification card -->
+          <div style="background: var(--bg-subtle); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 8px 12px; display: flex; align-items: flex-start; gap: 8px;">
+            <span style="font-size: 14px; flex-shrink: 0; margin-top: 1px;">💾</span>
+            <div style="flex: 1; min-width: 0; line-height: 1.45;">
+              <div style="font-size: 11.5px; color: var(--text-secondary); font-weight: 600;">NAS 中转暂存目录：</div>
+              <div id="uploadNasStagingPathDisplay" style="font-size: 11.5px; font-family: monospace; color: var(--primary); word-break: break-all; margin: 2px 0;">--</div>
+              <div style="font-size: 11px; color: var(--text-muted);">
+                说明：本机文件先通过局域网高速传输至 NAS 暂存，随后由 NAS 推送至光鸭云端。<b>云端入库完成后，NAS 上的临时暂存文件将自动彻底清理</b>，不残留占用硬盘空间。
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Upload Progress Section -->
+        <div id="uploadProgressSection" style="display: none; padding-top: 4px;">
+          <div class="task-details" style="margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+            <span id="uploadStatusLabel" style="font-size: 12.5px; color: var(--text); font-weight: 500;">准备中...</span>
+            <span id="uploadPctLabel" style="font-size: 12.5px; font-weight: 700; color: var(--primary);">0%</span>
+          </div>
+          <div class="progress-bar-bg" style="height: 8px; background: var(--bg-subtle); border-radius: 4px; overflow: hidden;">
+            <div class="progress-bar-fill" id="uploadProgressBar" style="width: 0%; height: 100%; background: var(--primary); transition: width 0.3s ease;"></div>
           </div>
         </div>
       </div>
@@ -4285,6 +4570,7 @@ HTML_PAGE = """<!DOCTYPE html>
         document.getElementById("navTrash")?.classList.add("active");
         document.getElementById("view-trash")?.classList.add("active");
         document.getElementById("breadcrumbs").innerHTML = `<span class="crumb-item current">🗑️ 回收站</span>`;
+        loadTrashFiles();
       } else if (viewName === 'settings') {
         document.getElementById("navSettings")?.classList.add("active");
         document.getElementById("view-settings")?.classList.add("active");
@@ -4299,8 +4585,249 @@ HTML_PAGE = """<!DOCTYPE html>
       else if (currentView === 'offline') loadCloudTasks();
       else if (currentView === 'strm') loadStrmView(true);
       else if (currentView === 'logs') loadLogs(true);
-      else if (currentView === 'trash') switchView('trash');
+      else if (currentView === 'trash') loadTrashFiles(true);
       else if (currentView === 'settings') loadSettings();
+    }
+
+    // ================= RECYCLE BIN (TRASH) =================
+    let currentRawTrash = [];
+    let selectedTrashIds = new Set();
+    let trashSearchQuery = "";
+
+    async function loadTrashFiles(showToastNotice = false) {
+      const tbody = document.getElementById("trashTableBody");
+      const emptyDiv = document.getElementById("trashEmptyContainer");
+      const tableWrap = document.getElementById("trashTableWrap");
+      if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 50px;">正在加载回收站文件...</td></tr>`;
+      }
+      try {
+        const res = await fetch("/api/trash?page=0&pageSize=200");
+        const json = await res.json();
+        currentRawTrash = json.list || [];
+        selectedTrashIds.clear();
+        updateTrashSelectionUI();
+        renderTrashList();
+        if (showToastNotice) showToast("回收站已刷新");
+      } catch (e) {
+        if (tbody) {
+          tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: #ef4444; padding: 50px;">加载回收站失败: ${escapeHtml(e.message)}</td></tr>`;
+        }
+      }
+    }
+
+    function handleTrashSearch(val) {
+      trashSearchQuery = (val || "").trim().toLowerCase();
+      renderTrashList();
+    }
+
+    function renderTrashList() {
+      const tbody = document.getElementById("trashTableBody");
+      const emptyDiv = document.getElementById("trashEmptyContainer");
+      const tableWrap = document.getElementById("trashTableWrap");
+      const totalInfo = document.getElementById("trashTotalInfo");
+
+      let filtered = currentRawTrash.slice();
+      if (trashSearchQuery) {
+        filtered = filtered.filter(item => (item.fileName || "").toLowerCase().includes(trashSearchQuery));
+      }
+
+      if (totalInfo) totalInfo.innerText = `共 ${filtered.length} 项 (总共 ${currentRawTrash.length} 项)`;
+
+      if (filtered.length === 0) {
+        if (tbody) tbody.innerHTML = "";
+        if (tableWrap) tableWrap.style.display = "none";
+        if (emptyDiv) emptyDiv.style.display = "block";
+        return;
+      }
+
+      if (tableWrap) tableWrap.style.display = "block";
+      if (emptyDiv) emptyDiv.style.display = "none";
+      if (!tbody) return;
+
+      tbody.innerHTML = "";
+      filtered.forEach(item => {
+        const tr = document.createElement("tr");
+        const isDir = (item.resType === 2);
+        const icon = isDir ? "📁" : getFileIcon(item.fileName);
+        const isSelected = selectedTrashIds.has(item.fileId);
+        if (isSelected) tr.classList.add("row-selected");
+
+        let leftDaysText = "--";
+        if (item.leftTime) {
+          const days = Math.ceil(item.leftTime / 86400);
+          leftDaysText = days > 0 ? `${days} 天` : "即将过期";
+        }
+
+        tr.innerHTML = `
+          <td style="text-align: center;">
+            <input type="checkbox" class="trash-item-cb" style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--brand);" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); toggleSelectTrashItem('${item.fileId}', this.checked)">
+          </td>
+          <td>
+            <div class="file-name-cell">
+              <span class="file-icon">${icon}</span>
+              <span class="file-name-text" title="${escapeHtml(item.fileName)}">${escapeHtml(item.fileName)}</span>
+            </div>
+          </td>
+          <td style="color: var(--text-muted); font-size: 12.5px;">${isDir ? '--' : formatBytes(item.fileSize)}</td>
+          <td style="color: var(--text-muted); font-size: 12px;">${formatDate(item.utime || item.ctime)}</td>
+          <td style="color: var(--text-muted); font-size: 12.5px;">
+            <span style="background: var(--bg-input); padding: 2px 7px; border-radius: 4px; font-weight: 500; color: var(--brand); border: 1px solid var(--border-subtle);">${leftDaysText}</span>
+          </td>
+          <td>
+            <div class="actions-cell" style="justify-content: flex-end; gap: 6px;">
+              <button class="btn-primary btn-sm" onclick="restoreSingleTrash('${item.fileId}', '${escapeHtml(item.fileName)}')" title="还原恢复该文件">
+                <span>♻️ 还原</span>
+              </button>
+              <button class="btn-danger btn-sm" onclick="deleteSingleTrash('${item.fileId}', '${escapeHtml(item.fileName)}')" title="彻底永久删除该文件">
+                <span>🗑️ 彻底删除</span>
+              </button>
+            </div>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      // Update select all checkbox state
+      const selectAllCheck = document.getElementById("selectAllTrashCheck");
+      if (selectAllCheck) {
+        selectAllCheck.checked = filtered.length > 0 && filtered.every(item => selectedTrashIds.has(item.fileId));
+      }
+    }
+
+    function toggleSelectAllTrash(checked) {
+      let filtered = currentRawTrash.slice();
+      if (trashSearchQuery) {
+        filtered = filtered.filter(item => (item.fileName || "").toLowerCase().includes(trashSearchQuery));
+      }
+      if (checked) {
+        filtered.forEach(item => selectedTrashIds.add(item.fileId));
+      } else {
+        filtered.forEach(item => selectedTrashIds.delete(item.fileId));
+      }
+      updateTrashSelectionUI();
+      renderTrashList();
+    }
+
+    function toggleSelectTrashItem(fileId, checked) {
+      if (checked) {
+        selectedTrashIds.add(fileId);
+      } else {
+        selectedTrashIds.delete(fileId);
+      }
+      updateTrashSelectionUI();
+      renderTrashList();
+    }
+
+    function updateTrashSelectionUI() {
+      const count = selectedTrashIds.size;
+      const restoreBtn = document.getElementById("trashBatchRestoreBtn");
+      const deleteBtn = document.getElementById("trashBatchDeleteBtn");
+      const restoreCount = document.getElementById("trashSelectedRestoreCount");
+      const deleteCount = document.getElementById("trashSelectedDeleteCount");
+      const selectedInfo = document.getElementById("trashSelectedInfo");
+
+      if (restoreBtn) restoreBtn.disabled = (count === 0);
+      if (deleteBtn) deleteBtn.disabled = (count === 0);
+      if (restoreCount) restoreCount.innerText = count;
+      if (deleteCount) deleteCount.innerText = count;
+      if (selectedInfo) {
+        selectedInfo.style.display = count > 0 ? "inline" : "none";
+        selectedInfo.innerText = `已选中 ${count} 项`;
+      }
+    }
+
+    async function restoreSingleTrash(fileId, fileName) {
+      try {
+        const res = await fetch("/api/trash/restore", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fileIds: [fileId] })
+        });
+        const d = await res.json();
+        if (!res.ok || d.error) throw new Error(d.error || "还原失败");
+        showToast(`已成功还原: ${fileName}`);
+        loadTrashFiles();
+        if (currentView === "files") loadFiles(currentParentId);
+      } catch (e) {
+        alert("还原失败: " + e.message);
+      }
+    }
+
+    async function batchRestoreTrash() {
+      const ids = Array.from(selectedTrashIds);
+      if (ids.length === 0) return;
+      if (!confirm(`确定要将选中的 ${ids.length} 个文件/文件夹还原恢复至网盘原位置吗？`)) return;
+      try {
+        const res = await fetch("/api/trash/restore", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fileIds: ids })
+        });
+        const d = await res.json();
+        if (!res.ok || d.error) throw new Error(d.error || "批量还原失败");
+        showToast(`已成功还原 ${ids.length} 个项目`);
+        loadTrashFiles();
+        if (currentView === "files") loadFiles(currentParentId);
+      } catch (e) {
+        alert("批量还原失败: " + e.message);
+      }
+    }
+
+    async function deleteSingleTrash(fileId, fileName) {
+      if (!confirm(`⚠️ 警告：确定要彻底删除“${fileName}”吗？此操作无法撤销！`)) return;
+      try {
+        const res = await fetch("/api/trash/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fileIds: [fileId] })
+        });
+        const d = await res.json();
+        if (!res.ok || d.error) throw new Error(d.error || "彻底删除失败");
+        showToast(`已彻底删除: ${fileName}`);
+        loadTrashFiles();
+      } catch (e) {
+        alert("彻底删除失败: " + e.message);
+      }
+    }
+
+    async function batchDeleteTrash() {
+      const ids = Array.from(selectedTrashIds);
+      if (ids.length === 0) return;
+      if (!confirm(`⚠️ 极度危险：确定要彻底永久删除选中的 ${ids.length} 个项目吗？文件将从云端彻底抹除，无法找回！`)) return;
+      try {
+        const res = await fetch("/api/trash/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fileIds: ids })
+        });
+        const d = await res.json();
+        if (!res.ok || d.error) throw new Error(d.error || "彻底删除失败");
+        showToast(`已彻底永久删除 ${ids.length} 个项目`);
+        loadTrashFiles();
+      } catch (e) {
+        alert("彻底删除失败: " + e.message);
+      }
+    }
+
+    async function confirmClearTrash() {
+      if (currentRawTrash.length === 0) {
+        alert("回收站当前已为空，无需清空");
+        return;
+      }
+      if (!confirm(`⚠️ 危险操作：确定要一键清空回收站内的全部 ${currentRawTrash.length} 个文件吗？此操作不可逆！`)) return;
+      try {
+        const res = await fetch("/api/trash/clear", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" }
+        });
+        const d = await res.json();
+        if (!res.ok || d.error) throw new Error(d.error || "清空回收站失败");
+        showToast("已清空云端回收站！");
+        loadTrashFiles();
+      } catch (e) {
+        alert("清空回收站失败: " + e.message);
+      }
     }
 
     // ================= VIEW: FILES =================
@@ -6622,13 +7149,128 @@ function escapeHtml(str) {
 
     const submitCloudAdd = resolveCloudAdd;
 
-    // ================= UPLOAD =================
+    // ================= UPLOAD (NAS DISK & BROWSER FILE) =================
+    let activeUploadTab = "nas";
+    let selectedNasFile = null;
+    let uploadTargetParentId = "";
+    let uploadTargetFolderPath = "全部文件";
+    let uploadPollTimer = null;
+
+    let nasFilePickerCallback = null;
+    let nasFilePickerSelectedFile = null;
+    let nasFilePickerCurrentPath = "";
+
     function openUploadModal() {
+      // 1. Initialize destination cloud folder: prefer currently viewed folder
+      if (currentParentId && currentParentId !== "") {
+        uploadTargetParentId = currentParentId;
+        uploadTargetFolderPath = (breadcrumbStack && breadcrumbStack.length > 0)
+          ? breadcrumbStack.map(b => b.name).join("/")
+          : "当前网盘目录";
+      } else {
+        uploadTargetParentId = "";
+        uploadTargetFolderPath = "全部文件";
+      }
+      const tfEl = document.getElementById("uploadTargetFolderText");
+      if (tfEl) tfEl.innerText = uploadTargetFolderPath;
+
+      const stagingEl = document.getElementById("uploadNasStagingPathDisplay");
+      if (stagingEl) {
+        stagingEl.innerText = defaultDownloadDir || "/vol1/1000/光鸭网盘";
+      }
+
+      // 2. Reset inputs and state
       selectedUploadFile = null;
-      document.getElementById("uploadFileNameText").innerText = "点击选择或拖拽文件到此处";
+      selectedNasFile = null;
+      if (uploadPollTimer) {
+        clearInterval(uploadPollTimer);
+        uploadPollTimer = null;
+      }
+
+      const uploadFileNameText = document.getElementById("uploadFileNameText");
+      if (uploadFileNameText) uploadFileNameText.innerText = "点击选择或拖拽本机文件到此处";
+
+      const fileInput = document.getElementById("uploadFileInput");
+      if (fileInput) fileInput.value = "";
+
+      const manualPathInput = document.getElementById("uploadNasManualPath");
+      if (manualPathInput) manualPathInput.value = "";
+
+      document.getElementById("uploadNasSelectedCard").style.display = "none";
+      document.getElementById("uploadNasEmptyCard").style.display = "block";
+
       document.getElementById("uploadProgressSection").style.display = "none";
       document.getElementById("startUploadBtn").disabled = false;
+
+      // Default to NAS tab
+      switchUploadTab("nas");
       openModal("uploadModal");
+    }
+
+    function chooseUploadCloudFolder() {
+      openCloudFolderPickerModal((selId, selPath) => {
+        uploadTargetParentId = selId;
+        uploadTargetFolderPath = selPath;
+        const tfEl = document.getElementById("uploadTargetFolderText");
+        if (tfEl) tfEl.innerText = selPath;
+      }, uploadTargetParentId, uploadTargetFolderPath);
+    }
+
+    function switchUploadTab(tab) {
+      activeUploadTab = tab;
+      if (tab === "nas") {
+        document.getElementById("tabUploadNasBtn").classList.add("active");
+        document.getElementById("tabUploadBrowserBtn").classList.remove("active");
+        document.getElementById("uploadSectionNas").style.display = "flex";
+        document.getElementById("uploadSectionBrowser").style.display = "none";
+      } else {
+        document.getElementById("tabUploadBrowserBtn").classList.add("active");
+        document.getElementById("tabUploadNasBtn").classList.remove("active");
+        document.getElementById("uploadSectionBrowser").style.display = "flex";
+        document.getElementById("uploadSectionNas").style.display = "none";
+      }
+    }
+
+    function getFileIcon(name) {
+      if (!name) return "📄";
+      const ext = name.split(".").pop().toLowerCase();
+      if (["mp4", "mkv", "avi", "mov", "wmv", "flv", "ts", "m2ts", "iso", "rmvb"].includes(ext)) return "🎬";
+      if (["mp3", "flac", "wav", "aac", "ogg", "m4a", "ape"].includes(ext)) return "🎵";
+      if (["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"].includes(ext)) return "🖼️";
+      if (["zip", "rar", "7z", "tar", "gz", "bz2", "xz"].includes(ext)) return "📦";
+      if (["torrent"].includes(ext)) return "📑";
+      if (["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md"].includes(ext)) return "📄";
+      return "📄";
+    }
+
+    function handleNasFileChosen(filePath, fileName, fileSize) {
+      selectedNasFile = { path: filePath, name: fileName, size: fileSize };
+      document.getElementById("uploadNasFileName").innerText = fileName;
+      document.getElementById("uploadNasFilePath").innerText = filePath;
+      document.getElementById("uploadNasFileSize").innerText = formatBytes(fileSize);
+      document.getElementById("uploadNasFileIcon").innerText = getFileIcon(fileName);
+      document.getElementById("uploadNasManualPath").value = filePath;
+
+      document.getElementById("uploadNasSelectedCard").style.display = "block";
+      document.getElementById("uploadNasEmptyCard").style.display = "none";
+    }
+
+    function handleNasManualPathChange(path) {
+      const val = (path || "").trim();
+      if (!val) {
+        selectedNasFile = null;
+        document.getElementById("uploadNasSelectedCard").style.display = "none";
+        document.getElementById("uploadNasEmptyCard").style.display = "block";
+        return;
+      }
+      const fileName = val.split("/").filter(Boolean).pop() || "未知文件";
+      selectedNasFile = { path: val, name: fileName, size: 0 };
+      document.getElementById("uploadNasFileName").innerText = fileName;
+      document.getElementById("uploadNasFilePath").innerText = val;
+      document.getElementById("uploadNasFileSize").innerText = "待检测";
+      document.getElementById("uploadNasFileIcon").innerText = getFileIcon(fileName);
+      document.getElementById("uploadNasSelectedCard").style.display = "block";
+      document.getElementById("uploadNasEmptyCard").style.display = "none";
     }
 
     function handleUploadSelect(input) {
@@ -6638,48 +7280,264 @@ function escapeHtml(str) {
       }
     }
 
-    async function submitUpload() {
-      if (!selectedUploadFile) {
-        alert("请先选择要上传的文件");
+    // ================= NAS FILE PICKER =================
+    function openNasFilePickerModal(callback, initPath = "") {
+      nasFilePickerCallback = callback;
+      nasFilePickerSelectedFile = null;
+      document.getElementById("confirmNasFilePickerBtn").disabled = true;
+      document.getElementById("nasFilePickerFooterPath").innerText = "未选择";
+      openModal("nasFilePickerModal");
+      loadNasFilePickerList(initPath || "");
+    }
+
+    function updateNasFilePickerBreadcrumbs(path) {
+      const el = document.getElementById("nasFilePickerBreadcrumbs");
+      if (!el) return;
+      if (!path) {
+        el.innerHTML = `<span class="crumb-item current" style="cursor: pointer;" onclick="loadNasFilePickerList('')">🏠 全部共享文件夹与存储卷</span>`;
         return;
       }
+      let html = `<span class="crumb-link" style="color: var(--primary); cursor: pointer;" onclick="loadNasFilePickerList('')">🏠 根目录</span>`;
+      const parts = path.split("/").filter(Boolean);
+      let accumulated = "";
+      for (let i = 0; i < parts.length; i++) {
+        accumulated += "/" + parts[i];
+        const isLast = (i === parts.length - 1);
+        const p = accumulated;
+        if (isLast) {
+          html += ` <span style="color: var(--text-dim); margin: 0 4px;">/</span> <span class="crumb-item current" style="font-weight: 600; color: var(--text);">${escapeHtml(parts[i])}</span>`;
+        } else {
+          html += ` <span style="color: var(--text-dim); margin: 0 4px;">/</span> <span class="crumb-link" style="color: var(--primary); cursor: pointer;" onclick="loadNasFilePickerList('${escapeHtml(p)}')">${escapeHtml(parts[i])}</span>`;
+        }
+      }
+      el.innerHTML = html;
+    }
+
+    async function loadNasFilePickerList(path) {
+      nasFilePickerCurrentPath = path;
+      updateNasFilePickerBreadcrumbs(path);
+      const container = document.getElementById("nasFilePickerList");
+      container.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 30px;">读取目录与文件中...</div>`;
+
+      try {
+        const res = await fetch(`/api/fs/browse?includeFiles=1&path=${encodeURIComponent(path)}`);
+        const json = await res.json();
+        const folders = json.folders || [];
+        const files = json.files || [];
+
+        if (folders.length === 0 && files.length === 0) {
+          container.innerHTML = `
+            <div style="text-align: center; padding: 36px 16px; color: var(--text-muted);">
+              <div style="font-size: 32px; margin-bottom: 6px;">📂</div>
+              <div style="font-size: 14px; font-weight: 600; color: var(--text);">此目录为空</div>
+              <div style="font-size: 12.5px; color: var(--text-dim); margin-top: 4px;">未找到可上传的文件或子文件夹</div>
+            </div>
+          `;
+          return;
+        }
+
+        container.innerHTML = "";
+
+        // Render Folders
+        folders.forEach(f => {
+          const div = document.createElement("div");
+          let itemIcon = f.is_volume ? "💽" : "📁";
+          let cleanName = (f.name || "").trim();
+          div.className = "fs-folder-item";
+          div.style.cursor = "pointer";
+          div.innerHTML = `
+            <div class="fs-folder-left" style="flex: 1; min-width: 0;" onclick="loadNasFilePickerList('${escapeHtml(f.path)}')">
+              <span style="font-size: 16px; flex-shrink: 0;">${itemIcon}</span>
+              <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500;" title="${escapeHtml(cleanName)}">${escapeHtml(cleanName)}</span>
+            </div>
+            <div style="font-size: 12px; color: var(--primary); flex-shrink: 0; padding-right: 4px;" onclick="loadNasFilePickerList('${escapeHtml(f.path)}')">
+              进入 ➔
+            </div>
+          `;
+          container.appendChild(div);
+        });
+
+        // Render Files
+        files.forEach(f => {
+          const div = document.createElement("div");
+          const icon = getFileIcon(f.name);
+          const isSelected = nasFilePickerSelectedFile && (nasFilePickerSelectedFile.path === f.path);
+          div.className = "fs-folder-item" + (isSelected ? " selected" : "");
+          div.dataset.path = f.path;
+          div.style.cursor = "pointer";
+          div.innerHTML = `
+            <div class="fs-folder-left" style="flex: 1; min-width: 0;">
+              <span style="font-size: 16px; flex-shrink: 0;">${icon}</span>
+              <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: ${isSelected ? '600' : '400'}; color: var(--text-main);" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
+            </div>
+            <div style="font-size: 12px; font-family: monospace; color: var(--text-muted); flex-shrink: 0;">
+              ${formatBytes(f.size)}
+            </div>
+          `;
+          div.onclick = () => selectNasFilePickerItem(f.path, f.name, f.size);
+          container.appendChild(div);
+        });
+
+      } catch (e) {
+        container.innerHTML = `<div style="text-align: center; color: #ef4444; padding: 24px;">加载失败: ${escapeHtml(String(e))}</div>`;
+      }
+    }
+
+    function selectNasFilePickerItem(filePath, fileName, fileSize) {
+      nasFilePickerSelectedFile = { path: filePath, name: fileName, size: fileSize };
+      document.getElementById("nasFilePickerFooterPath").innerText = `${fileName} (${formatBytes(fileSize)})`;
+      document.getElementById("confirmNasFilePickerBtn").disabled = false;
+
+      document.querySelectorAll("#nasFilePickerList .fs-folder-item").forEach(el => {
+        if (el.dataset.path === filePath) {
+          el.classList.add("selected");
+        } else {
+          el.classList.remove("selected");
+        }
+      });
+    }
+
+    function confirmNasFilePicker() {
+      if (!nasFilePickerSelectedFile) return;
+      if (typeof nasFilePickerCallback === "function") {
+        nasFilePickerCallback(nasFilePickerSelectedFile.path, nasFilePickerSelectedFile.name, nasFilePickerSelectedFile.size);
+      }
+      closeModal("nasFilePickerModal");
+    }
+
+    // ================= SUBMIT UPLOAD =================
+    async function submitUpload() {
+      if (activeUploadTab === "nas") {
+        if (!selectedNasFile || !selectedNasFile.path) {
+          alert("请先选择 NAS 上的文件");
+          return;
+        }
+      } else {
+        if (!selectedUploadFile) {
+          alert("请先选择要上传的本机文件");
+          return;
+        }
+      }
+
       document.getElementById("startUploadBtn").disabled = true;
       document.getElementById("uploadProgressSection").style.display = "block";
-      document.getElementById("uploadStatusLabel").innerText = "正在上传文件...";
-      document.getElementById("uploadProgressBar").style.width = "0%";
-      document.getElementById("uploadPctLabel").innerText = "0%";
+      document.getElementById("uploadStatusLabel").innerText = "正在发起上传...";
+      document.getElementById("uploadProgressBar").style.width = "5%";
+      document.getElementById("uploadPctLabel").innerText = "5%";
 
-      const formData = new FormData();
-      formData.append("file", selectedUploadFile);
-      formData.append("parentId", currentParentId);
+      try {
+        if (activeUploadTab === "nas") {
+          // Direct NAS file upload
+          const payload = {
+            source: "nas",
+            nasPath: selectedNasFile.path,
+            parentId: uploadTargetParentId || "",
+            customName: selectedNasFile.name || undefined
+          };
 
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", "/api/upload");
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          const pct = Math.floor((e.loaded / e.total) * 100);
-          document.getElementById("uploadProgressBar").style.width = pct + "%";
-          document.getElementById("uploadPctLabel").innerText = pct + "%";
-          if (pct === 100) {
-            document.getElementById("uploadStatusLabel").innerText = "文件已送达网盘，正在云端校验...";
+          const res = await fetch("/api/upload", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          if (!res.ok || data.error) {
+            throw new Error(data.error || "发起上传失败");
           }
-        }
-      };
-      xhr.onload = () => {
-        if (xhr.status === 200) {
-          showToast("文件上传成功！");
-          closeModal("uploadModal");
-          loadFiles();
+          pollUploadProgress(data.uploadId, false);
+
         } else {
-          alert("上传失败: " + xhr.responseText);
-          document.getElementById("startUploadBtn").disabled = false;
+          // Browser file upload via multipart
+          const formData = new FormData();
+          formData.append("file", selectedUploadFile);
+          formData.append("parentId", uploadTargetParentId || "");
+
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", "/api/upload");
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+              const pct = Math.floor((e.loaded / e.total) * 100);
+              const mapped = Math.min(50, Math.floor(pct * 0.5));
+              document.getElementById("uploadProgressBar").style.width = mapped + "%";
+              document.getElementById("uploadPctLabel").innerText = mapped + "%";
+              document.getElementById("uploadStatusLabel").innerText = `正在传输文件至 NAS 暂存 (${formatBytes(e.loaded)} / ${formatBytes(e.total)})...`;
+            }
+          };
+          xhr.onload = () => {
+            if (xhr.status === 200) {
+              try {
+                const data = JSON.parse(xhr.responseText);
+                if (data.uploadId) {
+                  document.getElementById("uploadProgressBar").style.width = "50%";
+                  document.getElementById("uploadPctLabel").innerText = "50%";
+                  document.getElementById("uploadStatusLabel").innerText = "文件已送达 NAS，正在云端校验入库...";
+                  pollUploadProgress(data.uploadId, true);
+                } else {
+                  showToast("文件上传成功！");
+                  closeModal("uploadModal");
+                  if (currentView === "files") loadFiles(currentParentId);
+                }
+              } catch (e) {
+                showToast("文件上传成功！");
+                closeModal("uploadModal");
+                if (currentView === "files") loadFiles(currentParentId);
+              }
+            } else {
+              alert("上传失败: " + xhr.responseText);
+              document.getElementById("startUploadBtn").disabled = false;
+            }
+          };
+          xhr.onerror = () => {
+            alert("网络传输错误");
+            document.getElementById("startUploadBtn").disabled = false;
+          };
+          xhr.send(formData);
         }
-      };
-      xhr.onerror = () => {
-        alert("网络传输错误");
+      } catch (err) {
+        alert("上传出错: " + err.message);
         document.getElementById("startUploadBtn").disabled = false;
-      };
-      xhr.send(formData);
+      }
+    }
+
+    function pollUploadProgress(uploadId, isBrowser = false) {
+      if (uploadPollTimer) clearInterval(uploadPollTimer);
+      uploadPollTimer = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/upload/status?uploadId=${encodeURIComponent(uploadId)}`);
+          if (!res.ok) return;
+          const data = await res.json();
+
+          const rawPct = data.percent || 0;
+          const displayPct = isBrowser ? Math.min(99, 50 + Math.floor(rawPct * 0.5)) : rawPct;
+          document.getElementById("uploadProgressBar").style.width = displayPct + "%";
+          document.getElementById("uploadPctLabel").innerText = displayPct + "%";
+          if (data.stageText) {
+            document.getElementById("uploadStatusLabel").innerText = data.stageText;
+          }
+
+          if (data.status === "completed") {
+            clearInterval(uploadPollTimer);
+            uploadPollTimer = null;
+            document.getElementById("uploadProgressBar").style.width = "100%";
+            document.getElementById("uploadPctLabel").innerText = "100%";
+            const succMsg = data.isInstant ? "⚡ 极速秒传成功！" : (isBrowser ? "✅ 实体文件上传成功，NAS 暂存已自动释放！" : "✅ 实体文件上传成功！");
+            document.getElementById("uploadStatusLabel").innerText = succMsg;
+            showToast(data.isInstant ? "文件秒传成功！" : "文件上传成功！");
+            setTimeout(() => {
+              closeModal("uploadModal");
+              if (currentView === "files") loadFiles(currentParentId);
+            }, 1000);
+          } else if (data.status === "failed") {
+            clearInterval(uploadPollTimer);
+            uploadPollTimer = null;
+            document.getElementById("uploadStatusLabel").innerText = "❌ 上传失败";
+            alert("上传失败: " + (data.error || "未知错误"));
+            document.getElementById("startUploadBtn").disabled = false;
+          }
+        } catch (e) {
+          console.error("Poll upload status failed:", e);
+        }
+      }, 700);
     }
 
     // Modal helpers
@@ -7202,6 +8060,114 @@ function escapeHtml(str) {
 </html>"""
 
 
+class MultipartStreamReader:
+    """Zero-memory-leak, high-performance chunked multipart stream parser for large file uploads."""
+    def __init__(self, stream, total_len, boundary_bytes):
+        self.stream = stream
+        self.total_len = total_len
+        self.remaining = total_len
+        self.delimiter = b'--' + boundary_bytes
+        self.end_delimiter = b'--' + boundary_bytes + b'--'
+        self.buf = b''
+
+    def _read_from_stream(self, size):
+        if self.remaining <= 0:
+            return b''
+        to_read = min(size, self.remaining)
+        chunk = self.stream.read(to_read)
+        if not chunk:
+            self.remaining = 0
+            return b''
+        self.remaining -= len(chunk)
+        return chunk
+
+    def read_line(self):
+        while b'\n' not in self.buf:
+            chunk = self._read_from_stream(64 * 1024)
+            if not chunk:
+                break
+            self.buf += chunk
+        if not self.buf:
+            return b''
+        idx = self.buf.find(b'\n')
+        if idx != -1:
+            line = self.buf[:idx + 1]
+            self.buf = self.buf[idx + 1:]
+            return line
+        line = self.buf
+        self.buf = b''
+        return line
+
+    def stream_file_to(self, out_file):
+        delim_pattern = b'\r\n' + self.delimiter
+        chunk_size = 1024 * 1024  # 1MB buffer
+        while True:
+            idx = self.buf.find(delim_pattern)
+            if idx != -1:
+                out_file.write(self.buf[:idx])
+                self.buf = self.buf[idx + 2:]
+                return
+            safe_len = max(0, len(self.buf) - (len(delim_pattern) + 32))
+            if safe_len > 0:
+                out_file.write(self.buf[:safe_len])
+                self.buf = self.buf[safe_len:]
+            chunk = self._read_from_stream(chunk_size)
+            if not chunk:
+                if self.buf:
+                    out_file.write(self.buf)
+                    self.buf = b''
+                return
+            self.buf += chunk
+
+    def parse(self, out_file):
+        fields = {}
+        filename = "upload.tmp"
+
+        while True:
+            line = self.read_line()
+            if not line:
+                break
+            line_strip = line.strip()
+            if line_strip.startswith(self.end_delimiter):
+                break
+            if self.delimiter in line_strip:
+                part_headers = {}
+                while True:
+                    h_line = self.read_line()
+                    if not h_line or h_line == b'\r\n' or h_line == b'\n':
+                        break
+                    header_text = h_line.decode('utf-8', errors='ignore').strip()
+                    if ':' in header_text:
+                        k, v = header_text.split(':', 1)
+                        part_headers[k.strip().lower()] = v.strip()
+
+                cd = part_headers.get('content-disposition', '')
+                if 'filename=' in cd:
+                    fn_match = re.search(r'filename="?([^";\r\n]+)"?', cd)
+                    if fn_match:
+                        raw_fn = fn_match.group(1).strip().replace('\\', '/')
+                        filename = os.path.basename(raw_fn) or "upload.tmp"
+                    self.stream_file_to(out_file)
+                elif 'name=' in cd:
+                    n_match = re.search(r'name="?([^";\r\n]+)"?', cd)
+                    name = n_match.group(1) if n_match else 'field'
+                    val = b''
+                    while True:
+                        v_line = self.read_line()
+                        if not v_line or self.delimiter in v_line:
+                            self.buf = v_line + self.buf
+                            break
+                        val += v_line
+                    fields[name] = val.rstrip(b'\r\n').decode('utf-8', errors='ignore')
+
+        # Drain any trailing remaining bytes in Content-Length
+        while self.remaining > 0:
+            drain = self._read_from_stream(min(self.remaining, 64 * 1024))
+            if not drain:
+                break
+
+        return fields, filename
+
 
 class RequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -7448,6 +8414,21 @@ class RequestHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
 
+        elif path == "/api/trash":
+            try:
+                page = int(query.get("page", [0])[0])
+            except Exception:
+                page = 0
+            try:
+                page_size = int(query.get("pageSize", [100])[0])
+            except Exception:
+                page_size = 100
+            try:
+                data = self.app.client.get_trash_list(page=page, page_size=page_size)
+                self._send_json(data)
+            except Exception as e:
+                self._send_json({"error": str(e), "list": [], "total": 0}, 500)
+
         elif path == "/api/download-url":
             file_id = query.get("fileId", [""])[0]
             try:
@@ -7567,6 +8548,7 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/fs/browse":
             target_path = query.get("path", [""])[0].strip()
+            include_files = query.get("includeFiles", ["0"])[0].lower() in ("1", "true", "yes")
             # If path is empty, return all user shared folders and storage volumes dynamically
             if not target_path:
                 folders = []
@@ -7591,39 +8573,60 @@ class RequestHandler(BaseHTTPRequestHandler):
                     if os.path.exists("/"):
                         folders.append({"name": "根目录 (/)", "path": "/"})
 
-                self._send_json({"currentPath": "", "folders": folders})
+                self._send_json({"currentPath": "", "folders": folders, "files": []})
                 return
 
             if not os.path.exists(target_path):
-                self._send_json({"error": "Path does not exist", "folders": []}, 400)
+                self._send_json({"error": "Path does not exist", "folders": [], "files": []}, 400)
                 return
 
             folders = []
+            files = []
             try:
                 with os.scandir(target_path) as it:
                     for entry in it:
                         try:
+                            if entry.name.startswith((".", "@")):
+                                continue
                             if entry.is_dir(follow_symlinks=True):
-                                if entry.name.startswith((".", "@")):
-                                    continue
                                 disp_name = entry.name
                                 if disp_name.isdigit() and int(disp_name) >= 1000:
                                     disp_name = f"用户空间 ({disp_name})"
                                 folders.append({
                                     "name": disp_name,
-                                    "path": entry.path.replace("\\", "/")
+                                    "path": entry.path.replace("\\", "/"),
+                                    "is_dir": True
+                                })
+                            elif include_files and entry.is_file(follow_symlinks=True):
+                                size = entry.stat().st_size
+                                files.append({
+                                    "name": entry.name,
+                                    "path": entry.path.replace("\\", "/"),
+                                    "size": size,
+                                    "is_dir": False
                                 })
                         except Exception:
                             pass
                 folders.sort(key=lambda x: x["name"].lower())
+                files.sort(key=lambda x: x["name"].lower())
                 self._send_json({
                     "currentPath": target_path.replace("\\", "/"),
-                    "folders": folders
+                    "folders": folders,
+                    "files": files
                 })
             except PermissionError:
-                self._send_json({"error": f"无权限访问该目录: {target_path}", "folders": []}, 403)
+                self._send_json({"error": f"无权限访问该目录: {target_path}", "folders": [], "files": []}, 403)
             except Exception as e:
-                self._send_json({"error": str(e), "folders": []}, 500)
+                self._send_json({"error": str(e), "folders": [], "files": []}, 500)
+
+        elif path == "/api/upload/status":
+            upload_id = query.get("uploadId", [""])[0].strip()
+            with self.app.upload_lock:
+                task = self.app.upload_tasks.get(upload_id)
+            if task:
+                self._send_json(task)
+            else:
+                self._send_json({"error": "Upload task not found"}, 404)
 
         elif path == "/api/fs/check-file":
             target_dir = query.get("targetDir", [""])[0].strip() or self.app.download_dir
@@ -8048,49 +9051,105 @@ class RequestHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
 
+        elif path == "/api/trash/restore":
+            try:
+                body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                file_ids = body.get("fileIds", [])
+                if not file_ids:
+                    self._send_json({"error": "请提供要还原的文件 ID (fileIds)"}, 400)
+                    return
+                res = self.app.client.restore_trash_files(file_ids)
+                self.app.log("SUCCESS", "system", f"♻️ 从回收站还原了 {len(file_ids)} 个文件/文件夹")
+                self._send_json({"status": "success", "result": res})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+
+        elif path == "/api/trash/delete":
+            try:
+                body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                file_ids = body.get("fileIds", [])
+                if not file_ids:
+                    self._send_json({"error": "请提供要彻底删除的文件 ID (fileIds)"}, 400)
+                    return
+                res = self.app.client.delete_trash_files(file_ids)
+                self.app.log("INFO", "system", f"🗑️ 从回收站彻底永久删除了 {len(file_ids)} 个文件/文件夹")
+                self._send_json({"status": "success", "result": res})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+
+        elif path == "/api/trash/clear":
+            try:
+                res = self.app.client.clear_recycle_bin()
+                self.app.log("WARN", "system", f"🧹 一键清空了云端回收站")
+                self._send_json({"status": "success", "result": res})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+
         elif path == "/api/upload":
             content_type = self.headers.get("Content-Type", "")
-            raw_data = self.rfile.read(content_length)
-            boundary = content_type.split("boundary=")[1].encode("utf-8")
-            parts = raw_data.split(b"--" + boundary)
-
-            file_bytes = None
-            filename = "upload.tmp"
-            parent_id = ""
-
-            for p in parts:
-                if b'name="file"' in p:
-                    if b'filename="' in p:
-                        f_start = p.find(b'filename="') + 10
-                        f_end = p.find(b'"', f_start)
-                        filename = p[f_start:f_end].decode("utf-8", errors="ignore")
-                    header_end = p.find(b"\r\n\r\n")
-                    if header_end != -1:
-                        file_bytes = p[header_end + 4 : -2]
-                elif b'name="parentId"' in p:
-                    header_end = p.find(b"\r\n\r\n")
-                    if header_end != -1:
-                        parent_id = p[header_end + 4 : -2].decode("utf-8")
-
-            if not file_bytes:
-                self._send_json({"error": "No file received"}, 400)
+            if "application/json" in content_type:
+                try:
+                    body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                    nas_path = body.get("nasPath", "").strip()
+                    parent_id = body.get("parentId", "").strip()
+                    custom_name = body.get("customName", "").strip() or None
+                    if not nas_path:
+                        self._send_json({"error": "请提供 NAS 文件路径 (nasPath)"}, 400)
+                        return
+                    if not os.path.exists(nas_path):
+                        self._send_json({"error": f"NAS 文件不存在: {nas_path}"}, 400)
+                        return
+                    if os.path.isdir(nas_path):
+                        self._send_json({"error": f"所选路径为文件夹，请选择具体文件上传: {nas_path}"}, 400)
+                        return
+                    upload_id = self.app.start_upload_task(nas_path, parent_id=parent_id, custom_name=custom_name, is_temp=False)
+                    self._send_json({"status": "started", "uploadId": upload_id})
+                except Exception as e:
+                    self._send_json({"error": str(e)}, 500)
                 return
 
-            temp_path = os.path.join(self.app.download_dir, ".upload_tmp_" + str(int(time.time())))
-            try:
-                os.makedirs(self.app.download_dir, exist_ok=True)
-                with open(temp_path, "wb") as f:
-                    f.write(file_bytes)
-                res = self.app.client.upload_file(temp_path, parent_id=parent_id, custom_name=filename)
-                self.app.log("SUCCESS", "system", f"⬆️ 成功上传本地文件至网盘: {filename}")
-                self._send_json(res)
-            except Exception as e:
-                self.app.log("ERROR", "system", f"❌ 上传文件至网盘失败: {filename}", f"错误: {e}")
-                self._send_json({"error": str(e)}, 500)
-            finally:
-                if os.path.exists(temp_path):
-                    try: os.remove(temp_path)
-                    except Exception: pass
+            if "multipart/form-data" in content_type:
+                try:
+                    boundary_str = content_type.split("boundary=")[1].strip()
+                    boundary_bytes = boundary_str.encode("utf-8")
+                except Exception:
+                    self._send_json({"error": "Invalid multipart boundary"}, 400)
+                    return
+
+                dest_dir = self.app.download_dir or "/vol1/1000"
+                if not os.path.exists(dest_dir):
+                    try:
+                        os.makedirs(dest_dir, exist_ok=True)
+                    except Exception:
+                        dest_dir = "/tmp"
+                temp_path = os.path.join(dest_dir, f".upload_tmp_{int(time.time())}_{uuid.uuid4().hex[:6]}")
+                try:
+                    os.makedirs(dest_dir, exist_ok=True)
+                    with open(temp_path, "wb") as f_out:
+                        reader = MultipartStreamReader(self.rfile, content_length, boundary_bytes)
+                        fields, filename = reader.parse(f_out)
+
+                    parent_id = fields.get("parentId", "").strip()
+                    if not os.path.exists(temp_path) or os.path.getsize(temp_path) == 0:
+                        if os.path.exists(temp_path):
+                            try: os.remove(temp_path)
+                            except Exception: pass
+                        self._send_json({"error": "未接收到有效文件数据或传输为空"}, 400)
+                        return
+
+                    file_size = os.path.getsize(temp_path)
+                    self.app.log("INFO", "system", f"📥 接收本机文件流完成: {filename} (暂存至 NAS: {dest_dir}, 大小: {format_size(file_size)})")
+                    upload_id = self.app.start_upload_task(temp_path, parent_id=parent_id, custom_name=filename, is_temp=True)
+                    self._send_json({"status": "started", "uploadId": upload_id, "fileName": filename})
+                except Exception as e:
+                    if os.path.exists(temp_path):
+                        try: os.remove(temp_path)
+                        except Exception: pass
+                    self.app.log("ERROR", "system", f"❌ 接收上传文件流失败", f"错误: {e}")
+                    self._send_json({"error": str(e)}, 500)
+                return
+
+            self._send_json({"error": "Unsupported Content-Type"}, 400)
         else:
             self.send_response(404)
             self.end_headers()

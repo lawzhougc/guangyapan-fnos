@@ -330,6 +330,73 @@ class GuangyapanClient:
     def rename_file(self, file_id: str, new_name: str) -> Dict[str, Any]:
         return self._post("/userres/v1/file/rename", {"fileId": file_id, "name": new_name})
 
+    # ================= Recycle Bin (Trash) =================
+    def get_trash_list(self, page: int = 0, page_size: int = 100, order_by: int = 12, sort_type: int = 1) -> Dict[str, Any]:
+        """
+        Get recycle bin (trash) file list.
+        Official endpoint: POST /userres/v1/file/get_file_list with dirType=4.
+        Returns: { total: int, list: [...] }
+        """
+        payload = {
+            "dirType": 4,
+            "page": page,
+            "pageSize": page_size,
+            "orderBy": order_by,
+            "sortType": sort_type
+        }
+        res = self._post("/userres/v1/file/get_file_list", payload)
+        return res.get("data") or {}
+
+    def restore_trash_files(self, file_ids) -> Dict[str, Any]:
+        """
+        Restore file(s) from recycle bin.
+        Official endpoint: POST /userres/v1/file/recycle_file with {"fileIds": [...]}
+        """
+        ids = [file_ids] if isinstance(file_ids, str) else list(file_ids)
+        res = self._post("/userres/v1/file/recycle_file", {"fileIds": ids})
+        task_id = (res.get("data") or {}).get("taskId")
+        if task_id:
+            import time
+            for _ in range(16):
+                time.sleep(0.5)
+                try:
+                    st_res = self._post("/userres/v1/get_task_status", {"taskId": task_id})
+                    st_data = st_res.get("data") or {}
+                    status = st_data.get("status")
+                    if status in (2, 3):
+                        break
+                except Exception:
+                    break
+        return res
+
+    def delete_trash_files(self, file_ids) -> Dict[str, Any]:
+        """
+        Permanently delete file(s) from recycle bin.
+        Official endpoint: POST /userres/v1/file/delete_file with {"fileIds": [...]}
+        """
+        return self.delete_file(file_ids)
+
+    def clear_recycle_bin(self) -> Dict[str, Any]:
+        """
+        Clear / empty entire recycle bin.
+        Official endpoint: POST /userres/v1/file/clear_recycle_bin
+        """
+        res = self._post("/userres/v1/file/clear_recycle_bin", {})
+        task_id = (res.get("data") or {}).get("taskId")
+        if task_id:
+            import time
+            for _ in range(20):
+                time.sleep(0.5)
+                try:
+                    st_res = self._post("/userres/v1/get_task_status", {"taskId": task_id})
+                    st_data = st_res.get("data") or {}
+                    status = st_data.get("status")
+                    if status in (2, 3):
+                        break
+                except Exception:
+                    break
+        return res
+
     # ================= Download =================
     def get_download_url(self, file_id: str) -> Dict[str, Any]:
         """
@@ -517,12 +584,19 @@ class GuangyapanClient:
                         pct = int((consumed_bytes / total_bytes) * 100)
                         progress_callback({"stage": "uploading", "percent": pct, "file": file_name, "uploaded": consumed_bytes, "total": total_bytes})
 
-                with open(file_path, "rb") as f:
-                    bucket.put_object(token_data["objectPath"], f, progress_callback=oss_progress)
+                if file_size > 50 * 1024 * 1024:
+                    try:
+                        oss2.resumable_upload(bucket, token_data["objectPath"], file_path, progress_callback=oss_progress, num_threads=2)
+                    except Exception:
+                        with open(file_path, "rb") as f:
+                            bucket.put_object(token_data["objectPath"], f, progress_callback=oss_progress)
+                else:
+                    with open(file_path, "rb") as f:
+                        bucket.put_object(token_data["objectPath"], f, progress_callback=oss_progress)
 
             except ImportError:
-                # Fallback to requests or urllib HTTP PUT if oss2 not installed
-                raise RuntimeError("oss2 is required for physical byte upload. Install with: pip install oss2")
+                # Fallback error when oss2 is missing
+                raise RuntimeError("检测到未安装阿里云 OSS SDK (oss2)。非秒传文件需要物理上传至对象存储，请在 NAS 终端执行: pip install oss2 -i https://pypi.tuna.tsinghua.edu.cn/simple --break-system-packages")
         else:
             raise NotImplementedError(f"Unsupported storage provider: {provider}")
 

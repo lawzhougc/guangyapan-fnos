@@ -1,52 +1,64 @@
-name: Scheduled Publish Release v1.2.1
+name: Scheduled Publish Release v1.2.3
 
 on:
   schedule:
-    # 2026-10-27 08:00:00 北京时间 (UTC+8) = 2026-10-27 00:00:00 UTC
-    - cron: '0 0 27 10 *'
-    # 08:10 北京时间冗余巡检（若已发布则自动跳过）
-    - cron: '10 0 27 10 *'
+    # 2026-10-30 02:00:00 北京时间 (UTC+8) = 2026-10-29 18:00:00 UTC
+    - cron: '0 18 29 10 *'
+    # 02:10 北京时间冗余巡检（若已发布则自动跳过）
+    - cron: '10 18 29 10 *'
   workflow_dispatch:
     inputs:
       tag_name:
-        description: '需要转为正式发布的版本标签 (默认 v1.2.1)'
+        description: '需要转为正式发布的版本标签 (默认 v1.2.3)'
         required: false
-        default: 'v1.2.1'
+        default: 'v1.2.3'
 
 permissions:
   contents: write
 
 jobs:
-  publish-draft-release:
+  publish-release:
     runs-on: ubuntu-latest
     steps:
-      - name: Publish Draft Release v1.2.1
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Publish Draft Release v1.2.3
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TARGET_TAG: ${{ github.event.inputs.tag_name || 'v1.2.1' }}
+          TARGET_TAG: ${{ github.event.inputs.tag_name || 'v1.2.3' }}
         run: |
           echo "Checking releases for tag: ${TARGET_TAG} ..."
-          RELEASE_JSON=$(gh api "/repos/${{ github.repository }}/releases" --jq ".[] | select(.tag_name == \"${TARGET_TAG}\")")
-          if [ -z "$RELEASE_JSON" ]; then
-            echo "No release found for ${TARGET_TAG}."
-            exit 0
-          fi
+          RELEASE_JSON=$(gh api "/repos/${{ github.repository }}/releases" --jq ".[] | select(.tag_name == \"${TARGET_TAG}\")" || true)
 
-          RELEASE_ID=$(echo "$RELEASE_JSON" | jq -r '.id')
-          IS_DRAFT=$(echo "$RELEASE_JSON" | jq -r '.draft')
-          echo "Found release ID=${RELEASE_ID}, draft=${IS_DRAFT}"
+          if [ -n "$RELEASE_JSON" ]; then
+            RELEASE_ID=$(echo "$RELEASE_JSON" | jq -r '.id')
+            IS_DRAFT=$(echo "$RELEASE_JSON" | jq -r '.draft')
+            echo "Found release ID=${RELEASE_ID}, draft=${IS_DRAFT}"
 
-          if [ "$IS_DRAFT" = "true" ]; then
-            echo "Publishing draft release ${TARGET_TAG} (ID: ${RELEASE_ID})..."
-            gh api \
-              --method PATCH \
-              -H "Accept: application/vnd.github+json" \
-              "/repos/${{ github.repository }}/releases/${RELEASE_ID}" \
-              -f tag_name="${TARGET_TAG}" \
-              -F draft=false \
-              -F prerelease=false \
-              -f make_latest="true"
-            echo "Successfully published ${TARGET_TAG}!"
+            if [ "$IS_DRAFT" = "true" ]; then
+              echo "Publishing draft release ${TARGET_TAG} (ID: ${RELEASE_ID})..."
+              gh api \
+                --method PATCH \
+                -H "Accept: application/vnd.github+json" \
+                "/repos/${{ github.repository }}/releases/${RELEASE_ID}" \
+                -f tag_name="${TARGET_TAG}" \
+                -F draft=false \
+                -F prerelease=false \
+                -f make_latest="true"
+              echo "Successfully published ${TARGET_TAG}!"
+            else
+              echo "Release ${TARGET_TAG} is already published. Skipping."
+            fi
           else
-            echo "Release ${TARGET_TAG} is already published. Skipping."
+            echo "No existing draft release found for ${TARGET_TAG}. Building packages from repository..."
+            python3 build_fpk.py --arch all
+
+            echo "Creating and publishing release ${TARGET_TAG}..."
+            gh release create "${TARGET_TAG}" \
+              guangyapan-*.fpk \
+              --title "${TARGET_TAG}: 支持从NAS本地存储直传网盘、目标目录自选与官方云端回收站 (by chaos)" \
+              --notes-file RELEASE_NOTES.md \
+              --latest
+            echo "Successfully created and published ${TARGET_TAG}!"
           fi

@@ -6,8 +6,8 @@ import hashlib
 import sys
 import argparse
 
-BASE_DIR = r"d:\antigravity\guangyapan_fnos"
-VERSION = "1.2.2"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+VERSION = "1.2.3"
 
 def build_package(target_arch="x86_64"):
     is_arm = target_arch.lower() in ("arm", "arm64", "aarch64")
@@ -197,7 +197,7 @@ install_type="root"
 checkport="false"
 micro_app="true"
 disable_authorization_path="true"
-changelog="{VERSION}: [{arch_tag.upper()} 架构 · chaos 适配版] 1. 新增多选批量下载（支持文件夹递归下载）与并发下载队列控制（默认 3 个并发，支持 1~16 手动调整与排队调度）；2. 突破目录 50 个文件显示上限（自动全量分页），新增底部每页显示数量设置（10/20/50/100/自定义）与翻页跳页栏；3. 删除本地下载任务时新增『同时删除 NAS 硬盘文件』确认弹窗；4. 应用介绍新增网页独立访问地址（http://<NAS_IP>:8998）与端口说明。"
+changelog="{VERSION}: [{arch_tag.upper()} 架构 · chaos 适配版] 1. 新增上传文件交互支持直接从 NAS 存储中浏览并选择文件进行高速直传，保留本机电脑文件上传双模切换；2. 新增上传目标云盘目录选择器，支持浏览网盘树状目录并自由更改上传保存位置；3. 服务启动与安装脚本自动预检并配置 oss2 官方 SDK，完善大文件物理上传分片与断点续传支持；4. 继承日志中心、批量并发下载队列与 STRM 网关等全部特性。"
 """
     with open(os.path.join(pkg_root, "manifest"), "w", encoding="utf-8", newline="\n") as f:
         f.write(manifest_content)
@@ -277,6 +277,9 @@ start_process() {
         run_script="${DATA_DIR}/main.py"
     fi
 
+    # 自动预检并确保 oss2 官方 SDK 已就绪 (用于非秒传物理对象存储上传)
+    python3 -c "import oss2" 2>/dev/null || python3 -m pip install oss2 -i https://pypi.tuna.tsinghua.edu.cn/simple --break-system-packages 2>/dev/null || true
+
     cd "$DATA_DIR" || exit 1
     nohup /usr/bin/python3 "$run_script" >> "${LOG_FILE}" 2>&1 &
     local new_pid=$!
@@ -345,6 +348,7 @@ esac
         "install_init": "#!/bin/bash\nexit 0\n",
         "install_callback": """#!/bin/bash
 chmod -R 755 /var/apps/guangyapan/cmd /var/apps/guangyapan/ui 2>/dev/null || true
+python3 -c "import oss2" 2>/dev/null || python3 -m pip install oss2 -i https://pypi.tuna.tsinghua.edu.cn/simple --break-system-packages 2>/dev/null || true
 exit 0
 """,
         "uninstall_init": """#!/bin/bash
@@ -364,6 +368,7 @@ exit 0
 """,
         "upgrade_callback": """#!/bin/bash
 chmod -R 755 /var/apps/guangyapan/cmd /var/apps/guangyapan/ui 2>/dev/null || true
+python3 -c "import oss2" 2>/dev/null || python3 -m pip install oss2 -i https://pypi.tuna.tsinghua.edu.cn/simple --break-system-packages 2>/dev/null || true
 exit 0
 """,
         "config_init": "#!/bin/bash\nexit 0\n",
