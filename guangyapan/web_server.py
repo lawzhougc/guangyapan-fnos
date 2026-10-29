@@ -1,4 +1,5 @@
 import os
+import shutil
 import json
 import time
 import re
@@ -1256,10 +1257,10 @@ HTML_PAGE = """<!DOCTYPE html>
       --border-focus: #ff6800;
 
       --text-main: #222222;
-      --text-regular: #444444;
-      --text-secondary: #666666;
-      --text-muted: #888888;
-      --text-placeholder: #999999;
+      --text-regular: #374151;
+      --text-secondary: #4b5563;
+      --text-muted: #595959;
+      --text-placeholder: #767676;
       --text-white: #ffffff;
 
       --btn-secondary-bg: #f3f3f3;
@@ -1297,9 +1298,9 @@ HTML_PAGE = """<!DOCTYPE html>
 
       --text-main: #f3f4f6;
       --text-regular: #e5e7eb;
-      --text-secondary: #9ca3af;
-      --text-muted: #6b7280;
-      --text-placeholder: #4b5563;
+      --text-secondary: #cbd5e1;
+      --text-muted: #94a3b8;
+      --text-placeholder: #64748b;
       --text-white: #ffffff;
 
       --btn-secondary-bg: #2a2a2a;
@@ -1308,7 +1309,7 @@ HTML_PAGE = """<!DOCTYPE html>
       --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
       --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
       --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
-      --shadow-brand: 0 4px 12px rgba(255, 104, 0, 0.3);
+      --shadow-brand: 0 4px 12px rgba(0, 0, 0, 0.5);
 
       /* Variable Aliases */
       --primary: var(--brand);
@@ -1454,16 +1455,16 @@ HTML_PAGE = """<!DOCTYPE html>
       right: 7px;
       background: var(--brand);
       color: #fff;
-      font-size: 10px;
+      font-size: 11px;
       font-weight: 700;
       padding: 1px 5px;
       border-radius: 10px;
-      min-width: 16px;
-      height: 16px;
+      min-width: 18px;
+      height: 18px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 1px 3px rgba(255, 104, 0, 0.4);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
     }
 
     .rail-badge.dot {
@@ -1701,7 +1702,7 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     .vip-tag {
-      font-size: 10px;
+      font-size: 11px;
       font-weight: 700;
       background: var(--vip-gradient);
       color: #ffffff;
@@ -1914,8 +1915,8 @@ HTML_PAGE = """<!DOCTYPE html>
 
     .btn-danger {
       background: #fee2e2;
-      color: #ef4444 !important;
-      border: 1px solid rgba(239, 68, 68, 0.2);
+      color: #b91c1c !important;
+      border: 1px solid rgba(185, 28, 28, 0.25);
       border-radius: var(--radius-sm);
       height: 36px;
       padding: 0 14px;
@@ -1930,7 +1931,17 @@ HTML_PAGE = """<!DOCTYPE html>
       white-space: nowrap;
     }
     .btn-danger:hover {
-      background: #ef4444;
+      background: #dc2626;
+      color: #ffffff !important;
+      border-color: #dc2626;
+    }
+    body[data-theme="dark"] .btn-danger {
+      background: rgba(239, 68, 68, 0.15);
+      color: #fca5a5 !important;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+    body[data-theme="dark"] .btn-danger:hover {
+      background: #dc2626;
       color: #ffffff !important;
     }
 
@@ -2115,14 +2126,29 @@ HTML_PAGE = """<!DOCTYPE html>
       align-items: center;
       justify-content: flex-end;
       gap: 6px;
-      opacity: 0.85;
       white-space: nowrap;
       flex-wrap: nowrap;
       min-width: 170px;
-      transition: opacity 0.15s;
     }
-    tbody tr:hover .actions-cell {
+    .actions-cell .btn-secondary,
+    .actions-cell .btn-danger {
+      opacity: 0.25;
+      transform: scale(0.96);
+      transition: opacity 0.15s ease, transform 0.15s ease, background 0.15s;
+    }
+    tbody tr:hover .actions-cell .btn-secondary,
+    tbody tr:hover .actions-cell .btn-danger,
+    tbody tr:focus-within .actions-cell .btn-secondary,
+    tbody tr:focus-within .actions-cell .btn-danger {
       opacity: 1;
+      transform: scale(1);
+    }
+    @media (hover: none) or (max-width: 768px) {
+      .actions-cell .btn-secondary,
+      .actions-cell .btn-danger {
+        opacity: 1;
+        transform: none;
+      }
     }
 
     /* Empty State */
@@ -2561,7 +2587,7 @@ HTML_PAGE = """<!DOCTYPE html>
       margin-left: auto;
     }
     .cloud-tree-tag-default {
-      font-size: 10px;
+      font-size: 11px;
       background: var(--brand-alpha-15);
       color: var(--brand);
       border: 1px solid var(--brand-alpha-25);
@@ -3197,7 +3223,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
       <!-- VIEW 3.5: STRM MEDIA CENTER -->
       <div class="content-view" id="view-strm">
-        <div class="official-card" style="overflow-y: auto; padding: 20px; gap: 18px;">
+        <div style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; padding: 2px 4px 20px 4px; gap: 18px;">
           <!-- Top Banner -->
           <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; padding: 16px 20px; border-radius: var(--radius-md); background: var(--bg-subtle); border: 1px solid var(--border);">
             <div style="display: flex; align-items: center; gap: 14px;">
@@ -3371,34 +3397,47 @@ HTML_PAGE = """<!DOCTYPE html>
       <!-- VIEW: LOGS CENTER -->
       <div class="content-view" id="view-logs">
         <div class="official-card">
-          <!-- Subtabs Bar & Toolbar -->
-          <div class="subtabs-bar">
-            <div class="subtabs-left">
+          <!-- Tier 1: Subtabs Category Navigation Bar -->
+          <div class="subtabs" style="padding: 12px 18px; border-bottom: 1px solid var(--border-subtle); display: flex; align-items: center; justify-content: space-between; background: var(--bg-card); flex-wrap: wrap; gap: 10px;">
+            <div class="subtabs-left" style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
               <button class="subtab-btn active" id="logSubtab-all" onclick="filterLogsByCategory('all')">全部 <span class="badge-pill" id="logCount-all">0</span></button>
               <button class="subtab-btn" id="logSubtab-download" onclick="filterLogsByCategory('download')">⬇️ 下载传输 <span class="badge-pill" id="logCount-download">0</span></button>
               <button class="subtab-btn" id="logSubtab-cloud" onclick="filterLogsByCategory('cloud')">⚡ 云端离线 <span class="badge-pill" id="logCount-cloud">0</span></button>
               <button class="subtab-btn" id="logSubtab-strm" onclick="filterLogsByCategory('strm')">🎬 STRM同步 <span class="badge-pill" id="logCount-strm">0</span></button>
               <button class="subtab-btn" id="logSubtab-system" onclick="filterLogsByCategory('system')">⚙️ 系统服务 <span class="badge-pill" id="logCount-system">0</span></button>
             </div>
-            <div class="toolbar-right" style="gap: 8px;">
-              <select class="form-select" id="logLevelSelect" onchange="onLogLevelChanged()" style="height: 32px; padding: 0 10px; font-size: 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg-input); color: var(--text-main);">
+            <div style="font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 6px;">
+              <span>实时轮询刷新 (1.5s)</span>
+            </div>
+          </div>
+
+          <!-- Tier 2: Log Filter & Operational Toolbar -->
+          <div style="padding: 10px 18px; background: var(--bg-subtle); border-bottom: 1px solid var(--border-subtle); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+            <!-- Left: Filter Controls -->
+            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <select class="form-select" id="logLevelSelect" onchange="onLogLevelChanged()" style="height: 34px; padding: 0 10px; font-size: 12.5px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg-card); color: var(--text-main); cursor: pointer;">
                 <option value="ALL">全部级别</option>
                 <option value="INFO">ℹ️ INFO 提示</option>
                 <option value="SUCCESS">✅ SUCCESS 成功</option>
                 <option value="WARN">⚠️ WARN 警告</option>
                 <option value="ERROR">❌ ERROR 异常</option>
               </select>
-              <div class="search-box" style="height: 32px; width: 170px;">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <input type="text" id="logSearchInput" placeholder="搜索日志..." oninput="onLogSearchInput()">
+              <div class="search-box" style="height: 34px; width: 220px; background: var(--bg-card);">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input type="text" id="logSearchInput" placeholder="按关键词搜索日志..." oninput="onLogSearchInput()" style="font-size: 12.5px;">
               </div>
-              <label style="display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-secondary); cursor: pointer; user-select: none;">
-                <input type="checkbox" id="logAutoScrollCheck" checked onchange="toggleLogAutoScroll()">
+            </div>
+
+            <!-- Right: Action Buttons & Options -->
+            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-secondary); cursor: pointer; user-select: none; padding: 4px 6px;">
+                <input type="checkbox" id="logAutoScrollCheck" checked onchange="toggleLogAutoScroll()" style="width: 15px; height: 15px; accent-color: var(--brand); cursor: pointer;">
                 <span>自动滚动</span>
               </label>
-              <button class="btn-secondary btn-sm" onclick="loadLogs(true)" title="刷新日志" style="height: 32px; padding: 0 10px; font-size: 12px;">🔄 刷新</button>
-              <button class="btn-outline btn-sm" onclick="confirmClearLogs()" title="清空日志" style="height: 32px; padding: 0 10px; font-size: 12px;">🗑️ 清空</button>
-              <button class="btn-primary btn-sm" onclick="exportLogs()" title="导出日志为 TXT 文件" style="height: 32px; padding: 0 12px; font-size: 12px;">📥 导出TXT</button>
+              <div style="width: 1px; height: 18px; background: var(--border); margin: 0 2px;"></div>
+              <button class="btn-secondary btn-sm" onclick="loadLogs(true)" title="刷新日志" style="height: 32px; padding: 0 12px; font-size: 12.5px; border-radius: 6px;">🔄 刷新</button>
+              <button class="btn-secondary btn-sm" onclick="confirmClearLogs()" title="清空全部日志" style="height: 32px; padding: 0 12px; font-size: 12.5px; border-radius: 6px; color: var(--text-secondary);">🗑️ 清空</button>
+              <button class="btn-primary btn-sm" onclick="exportLogs()" title="导出日志为 TXT 文件" style="height: 32px; padding: 0 14px; font-size: 12.5px; border-radius: 6px;">📥 导出 TXT</button>
             </div>
           </div>
 
@@ -3491,7 +3530,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
       <!-- VIEW 5: SETTINGS -->
       <div class="content-view" id="view-settings">
-        <div class="official-card">
+        <div style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto;">
           <div class="settings-grid">
             <!-- Setting 1: Storage Dir & Concurrency -->
             <div class="setting-card">
@@ -3602,6 +3641,7 @@ HTML_PAGE = """<!DOCTYPE html>
             <input type="text" id="dlConfirmPathInput" style="flex: 1; height: 38px; font-size: 13px; font-family: monospace; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 12px; color: var(--text-main);" readonly onclick="openFolderPicker(onDlConfirmFolderPicked)">
             <button class="btn-secondary" onclick="openFolderPicker(onDlConfirmFolderPicked)" style="height: 38px; padding: 0 16px; font-size: 13px; flex-shrink: 0;">📂 浏览目录</button>
           </div>
+          <div id="dlTargetDiskSpace" style="display: none; font-size: 12px; margin-top: 6px; padding: 6px 10px; border-radius: 6px; justify-content: space-between; align-items: center;"></div>
           <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px; line-height: 1.5;">
             💡 提示：可自由下载至 NAS 任意存储卷或共享文件夹（选择文件夹下载时将自动保持内部子目录结构）。
           </div>
@@ -4875,13 +4915,27 @@ HTML_PAGE = """<!DOCTYPE html>
       updateBatchSelectionUI();
 
       if (filtered.length === 0) {
+        let emptyTitle = "暂无相关文件";
+        let emptySub = "点击左上角「+ 上传」或「云添加」快速存储资源";
+        let resetBtnHtml = "";
+        const catMap = { video: "视频", img: "图片", doc: "文档", audio: "音频", installer: "安装包", recent: "最近修改" };
+        if (activeCategory !== 'all' && catMap[activeCategory]) {
+          emptyTitle = `当前目录下无「${catMap[activeCategory]}」文件`;
+          emptySub = "当前分类仅对本目录生效（子文件夹内的文件需进入对应目录查看）";
+          resetBtnHtml = `<button class="btn-secondary btn-sm" onclick="switchCategory('all')" style="margin-top: 12px; cursor: pointer;">👀 显示当前目录所有文件</button>`;
+        } else if (searchQuery) {
+          emptyTitle = `未找到匹配「${escapeHtml(searchQuery)}」的文件`;
+          emptySub = "可尝试检查拼写或切换至根目录重新搜索";
+          resetBtnHtml = `<button class="btn-secondary btn-sm" onclick="document.getElementById('fileSearchInput').value=''; handleSearch('');" style="margin-top: 12px; cursor: pointer;">✕ 清除搜索过滤</button>`;
+        }
         const emptyHtml = `
           <tr>
             <td colspan="5" style="padding: 0; border: none;">
               <div class="empty-container">
                 <img src="/empty.png" class="empty-duck-img" alt="暂无文件">
-                <div class="empty-title">暂无相关文件</div>
-                <div class="empty-sub">点击左上角「+ 上传」或「云添加」快速存储资源</div>
+                <div class="empty-title">${emptyTitle}</div>
+                <div class="empty-sub">${emptySub}</div>
+                ${resetBtnHtml}
               </div>
             </td>
           </tr>
@@ -5176,11 +5230,51 @@ function escapeHtml(str) {
     }
 
     // ================= DOWNLOAD CONFIRMATION & BATCH / NAS FOLDER SELECTION =================
+    async function updateDlTargetDiskSpace(targetDir) {
+      const spaceEl = document.getElementById("dlTargetDiskSpace");
+      const submitBtn = document.getElementById("dlConfirmSubmitBtn");
+      if (!spaceEl) return;
+      if (!targetDir) {
+        spaceEl.style.display = "none";
+        return;
+      }
+      try {
+        const res = await fetch(`/api/fs/browse?path=${encodeURIComponent(targetDir)}`);
+        const data = await res.json();
+        if (data && data.totalBytes > 0) {
+          const freeStr = formatBytes(data.freeBytes || 0);
+          const totalStr = formatBytes(data.totalBytes || 0);
+          spaceEl.style.display = "flex";
+          const totalPendingBytes = pendingDownloadItems.reduce((acc, i) => acc + (Number(i.fileSize) || 0), 0);
+          if (totalPendingBytes > 0 && data.freeBytes < totalPendingBytes) {
+            spaceEl.innerHTML = `<span>⚠️ <strong style="color: #b91c1c;">空间不足</strong>：预估需 ${formatBytes(totalPendingBytes)}，目标盘剩余 ${freeStr}</span>`;
+            spaceEl.style.background = "#fee2e2";
+            spaceEl.style.color = "#b91c1c";
+            spaceEl.style.border = "1px solid rgba(185, 28, 28, 0.25)";
+            if (submitBtn) submitBtn.disabled = true;
+          } else {
+            spaceEl.innerHTML = `<span>💾 NAS 目标磁盘容量：</span><span style="font-weight: 600; color: var(--text-main);">剩余可用 ${freeStr} <span style="font-weight: 400; color: var(--text-muted);">(总容量 ${totalStr})</span></span>`;
+            spaceEl.style.background = "var(--bg-subtle)";
+            spaceEl.style.color = "var(--text-secondary)";
+            spaceEl.style.border = "1px solid var(--border-subtle)";
+            if (submitBtn) submitBtn.disabled = false;
+          }
+        } else {
+          spaceEl.style.display = "none";
+          if (submitBtn) submitBtn.disabled = false;
+        }
+      } catch (e) {
+        spaceEl.style.display = "none";
+        if (submitBtn) submitBtn.disabled = false;
+      }
+    }
+
     function openDownloadModalWithItems(items) {
       pendingDownloadItems = items;
       const isBatchOrFolder = (items.length > 1) || (items.length === 1 && items[0].resType === 2);
 
       document.getElementById("dlConfirmPathInput").value = defaultDownloadDir;
+      updateDlTargetDiskSpace(defaultDownloadDir);
       document.getElementById("dlConfirmMaxConcurrentInput").value = maxConcurrentDownloads;
       const conflictBox = document.getElementById("dlConfirmConflictBox");
       const concurrencyBox = document.getElementById("dlConfirmConcurrencyBox");
@@ -5274,6 +5368,7 @@ function escapeHtml(str) {
 
     function onDlConfirmFolderPicked(selectedPath) {
       document.getElementById("dlConfirmPathInput").value = selectedPath;
+      updateDlTargetDiskSpace(selectedPath);
     }
 
     let duplicateContext = null;
@@ -8054,6 +8149,34 @@ function escapeHtml(str) {
         loadCloudTasks();
       }
     }, 5000);
+
+    // Desktop Keyboard Ergonomics
+    window.addEventListener('keydown', (e) => {
+      // Esc to close any open modal
+      if (e.key === 'Escape') {
+        const modals = document.querySelectorAll('.modal-backdrop');
+        let closedAny = false;
+        modals.forEach(m => {
+          if (m.style.display === 'flex' || window.getComputedStyle(m).display === 'flex') {
+            m.style.display = 'none';
+            closedAny = true;
+          }
+        });
+        if (closedAny) e.preventDefault();
+      }
+      // Ctrl+A / Cmd+A to select all files when browsing files
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+        const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
+        if (activeTag !== 'input' && activeTag !== 'textarea' && currentView === 'files') {
+          e.preventDefault();
+          if (currentPageFiles && currentPageFiles.length > 0) {
+            currentPageFiles.forEach(f => selectedFileIds.add(f.fileId));
+            renderFileList();
+            updateBatchSelectionUI();
+          }
+        }
+      }
+    });
   
   </script>
 </body>
@@ -8609,10 +8732,20 @@ class RequestHandler(BaseHTTPRequestHandler):
                             pass
                 folders.sort(key=lambda x: x["name"].lower())
                 files.sort(key=lambda x: x["name"].lower())
+                free_bytes = 0
+                total_bytes = 0
+                try:
+                    du = shutil.disk_usage(target_path)
+                    free_bytes = du.free
+                    total_bytes = du.total
+                except Exception:
+                    pass
                 self._send_json({
                     "currentPath": target_path.replace("\\", "/"),
                     "folders": folders,
-                    "files": files
+                    "files": files,
+                    "freeBytes": free_bytes,
+                    "totalBytes": total_bytes
                 })
             except PermissionError:
                 self._send_json({"error": f"无权限访问该目录: {target_path}", "folders": [], "files": []}, 403)
