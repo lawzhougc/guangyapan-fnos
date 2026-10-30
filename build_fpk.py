@@ -7,7 +7,7 @@ import sys
 import argparse
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-VERSION = "1.2.3"
+VERSION = "1.2.4"
 
 def build_package(target_arch="x86_64"):
     is_arm = target_arch.lower() in ("arm", "arm64", "aarch64")
@@ -99,14 +99,18 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, handle_sig)
     signal.signal(signal.SIGTERM, handle_sig)
     port = int(os.environ.get("PORT", 8998))
-    config_path = os.path.join(BASE_DIR, "config.json")
-    if not os.path.exists(config_path):
-        if os.path.exists("/var/apps/guangyapan/var/config.json"):
+    config_path = os.environ.get("CONFIG_PATH", "")
+    if not config_path or not os.path.exists(config_path):
+        candidate = os.path.join(BASE_DIR, "config.json")
+        if os.path.exists(candidate):
+            config_path = candidate
+        elif os.path.exists("/var/apps/guangyapan/var/config.json"):
             config_path = "/var/apps/guangyapan/var/config.json"
+        elif os.path.exists("/var/apps/guangyapan/target/config.json"):
+            config_path = "/var/apps/guangyapan/target/config.json"
         else:
-            candidates = glob.glob("/vol*/@appdata/guangyapan/config.json")
-            if candidates:
-                config_path = candidates[0]
+            candidates = glob.glob("/vol*/@appdata/guangyapan/config.json") + glob.glob("/usr/local/apps/@appdata/guangyapan/config.json")
+            config_path = candidates[0] if candidates else os.path.join(BASE_DIR, "config.json")
     run_server(port=port, config_path=config_path)
 """
     with open(os.path.join(app_payload_dir, "main.py"), "w", encoding="utf-8", newline="\n") as f:
@@ -180,7 +184,7 @@ if __name__ == "__main__":
     # Manifest
     manifest_content = f"""appname="guangyapan"
 version="{VERSION}"
-desc="光鸭网盘 fnOS 专用版，支持高速上传下载、多选批量与并发队列下载、磁链/BT云离线、STRM影视库302直连播放网关。【网页访问说明】除在飞牛桌面点击图标打开窗口外，亦可在浏览器直接访问 http://<NAS_IP>:8998（默认端口：8998）独立运行。"
+desc="光鸭网盘 fnOS 专用版，支持上传完整文件夹（NAS直传与本机电脑流水线双模）、单文件高速上传下载、多选批量并发下载队列、磁链/BT云离线、STRM影视库302直连播放网关及系统日志中心。【网页访问说明】除在飞牛桌面点击图标打开窗口外，亦可在浏览器直接访问 http://<NAS_IP>:8998（默认端口：8998）独立运行。"
 arch="{arch_val}"
 platform="{platform_val}"
 maintainer="chaos"
@@ -197,7 +201,7 @@ install_type="root"
 checkport="false"
 micro_app="true"
 disable_authorization_path="true"
-changelog="{VERSION}: [{arch_tag.upper()} 架构 · chaos 适配版] 1. 新增上传文件交互支持直接从 NAS 存储中浏览并选择文件进行高速直传，保留本机电脑文件上传双模切换；2. 新增上传目标云盘目录选择器，支持浏览网盘树状目录并自由更改上传保存位置；3. 服务启动与安装脚本自动预检并配置 oss2 官方 SDK，完善大文件物理上传分片与断点续传支持；4. 继承日志中心、批量并发下载队列与 STRM 网关等全部特性。"
+changelog="{VERSION}: [{arch_tag.upper()} 架构 · chaos 适配版] 1. 全面支持上传整个文件夹（包含完整递归子目录树），支持【NAS 磁盘文件夹直传】与【本机电脑文件夹流水线上传】双模；2. 目录智能递归建树、同名目录自动合并复用、同名同大小文件智能秒跳增量续传；3. 智能过滤系统特殊隐藏文件（@eaDir 缩略图、.DS_Store、Thumbs.db、.git 等），防止网盘文件被污染，同时完整保留有效空文件夹；4. 传输页面全新升级为双标签，新增【📤 网盘上传】统一管理单文件与文件夹上传生命周期、实时速率与进度监控；5. 顶部上传按钮改版为下拉菜单（上传文件 / 上传文件夹）。"
 """
     with open(os.path.join(pkg_root, "manifest"), "w", encoding="utf-8", newline="\n") as f:
         f.write(manifest_content)
@@ -277,8 +281,10 @@ start_process() {
         run_script="${DATA_DIR}/main.py"
     fi
 
-    # 自动预检并确保 oss2 官方 SDK 已就绪 (用于非秒传物理对象存储上传)
-    python3 -c "import oss2" 2>/dev/null || python3 -m pip install oss2 -i https://pypi.tuna.tsinghua.edu.cn/simple --break-system-packages 2>/dev/null || true
+    # 后台异步确保 oss2 依赖就绪 (非阻塞，不拖慢服务启动)
+    if ! python3 -c "import oss2" 2>/dev/null; then
+        nohup /usr/bin/python3 -m pip install oss2 -i https://pypi.tuna.tsinghua.edu.cn/simple --break-system-packages >/dev/null 2>&1 &
+    fi
 
     cd "$DATA_DIR" || exit 1
     nohup /usr/bin/python3 "$run_script" >> "${LOG_FILE}" 2>&1 &
@@ -316,7 +322,7 @@ stop_process() {
     fuser -k "${APP_PORT}/tcp" 2>/dev/null || true
     rm -f "$PID_FILE"
     echo "服务已停止"
-    exit 0
+    return 0
 }
 
 case "$1" in
@@ -325,6 +331,7 @@ case "$1" in
         ;;
     stop)
         stop_process
+        exit 0
         ;;
     status)
         status
@@ -347,8 +354,12 @@ esac
     callbacks = {
         "install_init": "#!/bin/bash\nexit 0\n",
         "install_callback": """#!/bin/bash
-chmod -R 755 /var/apps/guangyapan/cmd /var/apps/guangyapan/ui 2>/dev/null || true
-python3 -c "import oss2" 2>/dev/null || python3 -m pip install oss2 -i https://pypi.tuna.tsinghua.edu.cn/simple --break-system-packages 2>/dev/null || true
+TARGET_DIR="/var/apps/guangyapan/target"
+[ -n "$TRIM_APPDEST" ] && [ -d "$TRIM_APPDEST" ] && TARGET_DIR="$TRIM_APPDEST"
+chmod -R 755 /var/apps/guangyapan/cmd "${TARGET_DIR}/ui" 2>/dev/null || true
+if ! python3 -c "import oss2" 2>/dev/null; then
+    nohup /usr/bin/python3 -m pip install oss2 -i https://pypi.tuna.tsinghua.edu.cn/simple --break-system-packages >/dev/null 2>&1 &
+fi
 exit 0
 """,
         "uninstall_init": """#!/bin/bash
@@ -367,8 +378,12 @@ fuser -k 8998/tcp 2>/dev/null || true
 exit 0
 """,
         "upgrade_callback": """#!/bin/bash
-chmod -R 755 /var/apps/guangyapan/cmd /var/apps/guangyapan/ui 2>/dev/null || true
-python3 -c "import oss2" 2>/dev/null || python3 -m pip install oss2 -i https://pypi.tuna.tsinghua.edu.cn/simple --break-system-packages 2>/dev/null || true
+TARGET_DIR="/var/apps/guangyapan/target"
+[ -n "$TRIM_APPDEST" ] && [ -d "$TRIM_APPDEST" ] && TARGET_DIR="$TRIM_APPDEST"
+chmod -R 755 /var/apps/guangyapan/cmd "${TARGET_DIR}/ui" 2>/dev/null || true
+if ! python3 -c "import oss2" 2>/dev/null; then
+    nohup /usr/bin/python3 -m pip install oss2 -i https://pypi.tuna.tsinghua.edu.cn/simple --break-system-packages >/dev/null 2>&1 &
+fi
 exit 0
 """,
         "config_init": "#!/bin/bash\nexit 0\n",

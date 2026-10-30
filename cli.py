@@ -44,6 +44,11 @@ def main():
     p_up.add_argument("-d", "--dir", default="", help="网盘目标文件夹 ID")
     p_up.add_argument("-n", "--name", help="网盘中显示的文件名")
 
+    # mkdir
+    p_mkdir = subparsers.add_parser("mkdir", help="在光鸭网盘中新建文件夹")
+    p_mkdir.add_argument("name", help="新文件夹名称")
+    p_mkdir.add_argument("-d", "--dir", default="", help="父文件夹 ID (留空表示根目录)")
+
     args = parser.parse_args()
 
     if not args.command or args.command == "server":
@@ -130,6 +135,16 @@ def main():
 
         res = client.upload_file(args.file_path, parent_id=args.dir, custom_name=args.name, progress_callback=p_cb)
         print("✅ 上传成功! 文件信息:", res)
+
+    elif args.command == "mkdir":
+        res = client.create_folder(args.name, parent_id=args.dir)
+        code = res.get("code")
+        if code == 0 or res.get("msg") == "success":
+            print(f"✅ 文件夹创建成功: {args.name}")
+            if "data" in res and "fileId" in res["data"]:
+                print(f"📁 文件夹 ID: {res['data']['fileId']}")
+        else:
+            print(f"❌ 文件夹创建失败: {res.get('msg', '未知错误')} (代码: {code})")
 
 if __name__ == "__main__":
     main()

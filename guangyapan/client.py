@@ -3,7 +3,7 @@ import time
 import os
 import urllib.request
 import urllib.error
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from .hash_utils import calculate_gcid_cid, calculate_file_md5
 
 class GuangyapanClient:
@@ -288,11 +288,79 @@ class GuangyapanClient:
         return all_items
 
     def create_folder(self, name: str, parent_id: str = "") -> Dict[str, Any]:
+        folder_name = (name or "").strip()
+        if not folder_name:
+            return {"code": 400, "msg": "文件夹名称不能为空"}
         body = {
-            "name": name,
+            "dirName": folder_name,
+            "name": folder_name,
             "parentId": parent_id or ""
         }
         return self._post("/userres/v1/file/create_dir", body)
+
+    def list_folder_children_map(self, parent_id: str = "") -> Tuple[Dict[str, str], Dict[str, int]]:
+        """
+        List all children under parent_id, returning:
+        (folders_map: {folder_name: file_id}, files_map: {file_name: file_size_in_bytes})
+        """
+        folders_map: Dict[str, str] = {}
+        files_map: Dict[str, int] = {}
+        try:
+            items = self.list_all_files(parent_id=parent_id)
+            for item in items:
+                fname = (item.get("name") or item.get("fileName") or "").strip()
+                if not fname:
+                    continue
+                fid = item.get("fileId") or ""
+                is_dir = (item.get("resType") == 2 or bool(item.get("isDir")))
+                if is_dir:
+                    folders_map[fname] = fid
+                else:
+                    size_val = item.get("size") if item.get("size") is not None else item.get("fileSize", 0)
+                    try:
+                        files_map[fname] = int(size_val)
+                    except (ValueError, TypeError):
+                        files_map[fname] = 0
+        except Exception as e:
+            print(f"[Client] list_folder_children_map failed for parent_id='{parent_id}': {e}")
+        return folders_map, files_map
+
+    def get_or_create_folder(self, name: str, parent_id: str = "", existing_folders: Optional[Dict[str, str]] = None) -> str:
+        """
+        Idempotent directory getter or creator.
+        If the folder already exists under parent_id, returns its fileId.
+        Otherwise creates it and returns its new fileId.
+        """
+        folder_name = (name or "").strip()
+        if not folder_name:
+            return parent_id or ""
+
+        if existing_folders is not None:
+            if folder_name in existing_folders:
+                return existing_folders[folder_name]
+        else:
+            # Check existing cloud directory
+            subfolders, _ = self.list_folder_children_map(parent_id=parent_id)
+            if folder_name in subfolders:
+                return subfolders[folder_name]
+
+        # Not found, create it
+        res = self.create_folder(folder_name, parent_id=parent_id)
+        data = res.get("data")
+        new_fid = data.get("fileId") if isinstance(data, dict) else (data if isinstance(data, str) else None)
+        if not new_fid or res.get("code") != 0:
+            # Re-list to check if already exists or created concurrently
+            time.sleep(0.3)
+            subfolders_retry, _ = self.list_folder_children_map(parent_id=parent_id)
+            if folder_name in subfolders_retry:
+                new_fid = subfolders_retry[folder_name]
+            else:
+                err_msg = res.get("msg") or f"创建文件夹失败 (code: {res.get('code')})"
+                raise RuntimeError(err_msg)
+
+        if existing_folders is not None and new_fid:
+            existing_folders[folder_name] = new_fid
+        return new_fid
 
     def delete_file(self, file_id: str) -> Dict[str, Any]:
         """

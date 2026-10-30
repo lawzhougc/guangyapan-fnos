@@ -94,7 +94,7 @@ stop_process() {
     fuser -k "${APP_PORT}/tcp" 2>/dev/null || true
     rm -f "$PID_FILE"
     echo "服务已停止"
-    exit 0
+    return 0
 }
 
 case "$1" in
@@ -103,6 +103,7 @@ case "$1" in
         ;;
     stop)
         stop_process
+        exit 0
         ;;
     status)
         status

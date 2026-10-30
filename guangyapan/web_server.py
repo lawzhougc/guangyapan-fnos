@@ -13,7 +13,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from .client import GuangyapanClient
 from .downloader import FileDownloader, fix_permissions, format_size, format_speed
 
-APP_VERSION = "1.2.3"
+APP_VERSION = "1.2.4"
 GITHUB_REPO_URL = "https://github.com/lawzhougc/guangyapan-fnos"
 _VERSION_CACHE = {"last_check": 0, "data": None}
 
@@ -23,6 +23,21 @@ STRM_VIDEO_EXTS = {
 }
 STRM_SUB_EXTS = {"srt", "ass", "ssa", "vtt", "sub", "idx", "sup", "smi"}
 STRM_META_EXTS = {"nfo", "jpg", "jpeg", "png", "tbn"}
+
+IGNORED_PATTERNS = {
+    "@eaDir", ".DS_Store", "Thumbs.db", "desktop.ini", ".git", ".svn",
+    ".hg", "__MACOSX", ".upload_tmp_", ".stversions", ".debris"
+}
+
+def is_ignored_entry(name: str) -> bool:
+    if not name:
+        return True
+    clean = name.strip()
+    if clean in IGNORED_PATTERNS:
+        return True
+    if clean.startswith("._") or clean.startswith(".upload_tmp_"):
+        return True
+    return False
 
 def detect_local_ip():
     """Auto-detect the primary LAN IPv4 address of the NAS host."""
@@ -296,6 +311,8 @@ class GuangyapanApp:
         # Upload tasks state
         self.upload_tasks = {}
         self.upload_lock = threading.Lock()
+        self.folder_upload_tasks = {}
+        self.folder_upload_lock = threading.Lock()
         saved_concurrency = self.client.config.get("max_concurrent_downloads", 3)
         try:
             self.max_concurrent_downloads = max(1, min(16, int(saved_concurrency or 3)))
@@ -469,6 +486,392 @@ class GuangyapanApp:
 
         threading.Thread(target=_worker, daemon=True).start()
         return upload_id
+
+    # ================= Folder Upload Engine =================
+    def start_nas_folder_upload(self, folder_path: str, target_parent_id: str = "") -> str:
+        folder_path = os.path.abspath(folder_path.rstrip("/\\")).replace("\\", "/")
+        if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
+            raise ValueError(f"NAS 文件夹路径不存在或不是有效目录: {folder_path}")
+
+        folder_name = os.path.basename(folder_path) or "新建文件夹"
+        task_id = "fup_" + str(int(time.time() * 1000)) + "_" + uuid.uuid4().hex[:6]
+        cancel_event = threading.Event()
+
+        task = {
+            "id": task_id,
+            "type": "folder",
+            "source": "nas",
+            "name": folder_name,
+            "rootPath": folder_path,
+            "targetParentId": target_parent_id or "",
+            "status": "scanning",
+            "stage": "scanning",
+            "stageText": "正在扫描目录结构与统计文件...",
+            "totalFiles": 0,
+            "finishedFiles": 0,
+            "skippedFiles": 0,
+            "failedFiles": 0,
+            "totalBytes": 0,
+            "finishedBytes": 0,
+            "currentFile": "",
+            "currentFilePercent": 0,
+            "overallPercent": 0,
+            "speed": "0 KB/s",
+            "speedBytes": 0,
+            "startTime": time.time(),
+            "finishTime": None,
+            "errors": [],
+            "_cancel_event": cancel_event
+        }
+
+        with self.folder_upload_lock:
+            self.folder_upload_tasks[task_id] = task
+
+        def _worker():
+            try:
+                self.log("INFO", "system", f"📁 开始扫描 NAS 文件夹准备上传: {folder_name} (路径: {folder_path}, 目标父目录ID: '{target_parent_id or '根目录'}')")
+                
+                # Step 1: Scan directories & files
+                all_rel_dirs = set()
+                all_files = []  # list of (rel_f, abs_f, sz, rel_dir, fname)
+                total_bytes = 0
+
+                for root, dirs, files in os.walk(folder_path):
+                    if cancel_event.is_set():
+                        break
+                    # Filter ignored dirs in place to prune subtree traversal
+                    dirs[:] = [d for d in dirs if not is_ignored_entry(d)]
+
+                    rel_root = os.path.relpath(root, folder_path).replace("\\", "/")
+                    if rel_root == ".":
+                        rel_root = ""
+                    else:
+                        all_rel_dirs.add(rel_root)
+
+                    for f in files:
+                        if is_ignored_entry(f):
+                            continue
+                        abs_f = os.path.join(root, f)
+                        try:
+                            sz = os.path.getsize(abs_f)
+                        except Exception:
+                            sz = 0
+                        rel_f = os.path.relpath(abs_f, folder_path).replace("\\", "/")
+                        all_files.append((rel_f, abs_f, sz, rel_root, f))
+                        total_bytes += sz
+
+                if cancel_event.is_set():
+                    with self.folder_upload_lock:
+                        task["status"] = "cancelled"
+                        task["stageText"] = "任务已被用户取消"
+                        task["finishTime"] = time.time()
+                    return
+
+                total_files_count = len(all_files)
+                with self.folder_upload_lock:
+                    task["totalFiles"] = total_files_count
+                    task["totalBytes"] = total_bytes
+                    task["stage"] = "creating_tree"
+                    task["stageText"] = f"目录扫描完成，共 {total_files_count} 个文件 ({format_size(total_bytes)})，正在同步网盘文件夹..."
+
+                self.log("INFO", "system", f"📁 扫描完成: {folder_name}，共计 {total_files_count} 个文件，总大小 {format_size(total_bytes)}，开始同步云端目录树")
+
+                # Step 2: Create root folder on Guangyapan
+                root_cloud_id = self.client.get_or_create_folder(folder_name, parent_id=target_parent_id)
+                dir_map = {"": root_cloud_id}
+                cloud_cache = {}  # parent_cloud_id -> (subfolders_map, files_map)
+
+                # Sort relative dirs by depth
+                sorted_rel_dirs = sorted(list(all_rel_dirs), key=lambda d: d.count("/"))
+                for rdir in sorted_rel_dirs:
+                    if cancel_event.is_set():
+                        break
+                    parts = rdir.split("/")
+                    cur_accum = ""
+                    for part in parts:
+                        parent_accum = cur_accum
+                        cur_accum = (cur_accum + "/" + part).lstrip("/")
+                        if cur_accum in dir_map:
+                            continue
+                        parent_cid = dir_map.get(parent_accum, root_cloud_id)
+                        if parent_cid not in cloud_cache:
+                            cloud_cache[parent_cid] = self.client.list_folder_children_map(parent_cid)
+                        existing_subfolders, _ = cloud_cache[parent_cid]
+                        part_cid = self.client.get_or_create_folder(part, parent_id=parent_cid, existing_folders=existing_subfolders)
+                        dir_map[cur_accum] = part_cid
+                        if part_cid not in cloud_cache:
+                            cloud_cache[part_cid] = ({}, {})
+
+                if cancel_event.is_set():
+                    with self.folder_upload_lock:
+                        task["status"] = "cancelled"
+                        task["stageText"] = "任务已被用户取消"
+                        task["finishTime"] = time.time()
+                    return
+
+                with self.folder_upload_lock:
+                    task["status"] = "running"
+                    task["stage"] = "uploading"
+                    task["stageText"] = "文件夹层级同步就绪，正在传输文件..."
+
+                # Step 3: Concurrent file uploads
+                import queue
+                file_q = queue.Queue()
+                for item in all_files:
+                    file_q.put(item)
+
+                progress_lock = threading.Lock()
+                last_speed_check = [time.time(), task["finishedBytes"]]
+
+                def _file_worker():
+                    while not file_q.empty() and not cancel_event.is_set():
+                        try:
+                            rel_f, abs_f, sz, rel_dir, fname = file_q.get_nowait()
+                        except queue.Empty:
+                            break
+
+                        target_cid = dir_map.get(rel_dir, root_cloud_id)
+                        # Check cloud cache for duplicate
+                        if target_cid not in cloud_cache:
+                            cloud_cache[target_cid] = self.client.list_folder_children_map(target_cid)
+                        _, cloud_files = cloud_cache[target_cid]
+
+                        # Incremental skip if same name and size exists
+                        if fname in cloud_files and cloud_files[fname] == sz:
+                            with progress_lock:
+                                task["skippedFiles"] += 1
+                                task["finishedFiles"] += 1
+                                task["finishedBytes"] += sz
+                                if task["totalBytes"] > 0:
+                                    task["overallPercent"] = min(100, int((task["finishedBytes"] / task["totalBytes"]) * 100))
+                                task["stageText"] = f"正在传输: {task['finishedFiles']}/{task['totalFiles']} (秒跳同名文件: {fname})"
+                            file_q.task_done()
+                            continue
+
+                        # Upload with retry
+                        success = False
+                        last_err = None
+                        for attempt in range(2):
+                            if cancel_event.is_set():
+                                break
+                            try:
+                                def _single_prog(pinfo):
+                                    with progress_lock:
+                                        task["currentFile"] = rel_f
+                                        pct = pinfo.get("percent", 0)
+                                        task["currentFilePercent"] = pct
+                                        now = time.time()
+                                        dt = now - last_speed_check[0]
+                                        if dt >= 1.0:
+                                            db = task["finishedBytes"] - last_speed_check[1]
+                                            spd = max(0.0, db / dt)
+                                            task["speed"] = format_speed(spd)
+                                            task["speedBytes"] = spd
+                                            last_speed_check[0] = now
+                                            last_speed_check[1] = task["finishedBytes"]
+
+                                self.client.upload_file(abs_f, parent_id=target_cid, custom_name=fname, progress_callback=_single_prog)
+                                success = True
+                                break
+                            except Exception as e:
+                                last_err = e
+                                time.sleep(1)
+
+                        with progress_lock:
+                            if success:
+                                task["finishedFiles"] += 1
+                                task["finishedBytes"] += sz
+                            else:
+                                task["failedFiles"] += 1
+                                task["errors"].append({"file": rel_f, "error": str(last_err)})
+                            if task["totalBytes"] > 0:
+                                task["overallPercent"] = min(100, int((task["finishedBytes"] / task["totalBytes"]) * 100))
+                            task["stageText"] = f"正在传输: {task['finishedFiles']}/{task['totalFiles']} (成功: {task['finishedFiles'] - task['skippedFiles']}, 跳过: {task['skippedFiles']}, 失败: {task['failedFiles']})"
+
+                        file_q.task_done()
+
+                threads = []
+                num_threads = min(2, max(1, total_files_count)) if total_files_count > 0 else 1
+                for _ in range(num_threads):
+                    t = threading.Thread(target=_file_worker, daemon=True)
+                    t.start()
+                    threads.append(t)
+
+                for t in threads:
+                    t.join()
+
+                with self.folder_upload_lock:
+                    task["finishTime"] = time.time()
+                    task["speed"] = "0 KB/s"
+                    if cancel_event.is_set():
+                        task["status"] = "cancelled"
+                        task["stageText"] = "任务已被用户取消"
+                        self.log("WARN", "system", f"⏹️ NAS 文件夹上传已取消: {folder_name}")
+                    elif task["failedFiles"] > 0:
+                        task["status"] = "partially_failed"
+                        task["stageText"] = f"上传完成，共 {task['finishedFiles']} 个完成（跳过 {task['skippedFiles']} 个），{task['failedFiles']} 个失败"
+                        self.log("WARN", "system", f"⚠️ NAS 文件夹上传部分失败: {folder_name} (失败 {task['failedFiles']} 个文件)")
+                    else:
+                        task["status"] = "completed"
+                        task["overallPercent"] = 100
+                        task["stageText"] = f"✅ 文件夹全部上传成功（共 {task['finishedFiles']} 个文件，跳过 {task['skippedFiles']} 个）"
+                        self.log("SUCCESS", "system", f"✅ NAS 文件夹上传成功: {folder_name} (共计 {task['finishedFiles']} 个文件)")
+            except Exception as e:
+                with self.folder_upload_lock:
+                    task["status"] = "failed"
+                    task["finishTime"] = time.time()
+                    task["stageText"] = f"❌ 文件夹上传异常: {e}"
+                    task["errors"].append({"file": "ROOT", "error": str(e)})
+                self.log("ERROR", "system", f"❌ NAS 文件夹上传异常: {folder_name}", f"错误: {e}")
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return task_id
+
+    def init_browser_folder_upload(self, folder_name: str, target_parent_id: str, total_files: int, total_bytes: int, directories: list, files_meta: list) -> dict:
+        folder_name = (folder_name or "新建文件夹").strip()
+        task_id = "fup_" + str(int(time.time() * 1000)) + "_" + uuid.uuid4().hex[:6]
+        cancel_event = threading.Event()
+
+        task = {
+            "id": task_id,
+            "type": "folder",
+            "source": "browser",
+            "name": folder_name,
+            "rootPath": folder_name,
+            "targetParentId": target_parent_id or "",
+            "status": "running",
+            "stage": "uploading",
+            "stageText": "正在从本机浏览器流水线接收文件...",
+            "totalFiles": int(total_files or 0),
+            "finishedFiles": 0,
+            "skippedFiles": 0,
+            "failedFiles": 0,
+            "totalBytes": int(total_bytes or 0),
+            "finishedBytes": 0,
+            "currentFile": "",
+            "currentFilePercent": 0,
+            "overallPercent": 0,
+            "speed": "0 KB/s",
+            "speedBytes": 0,
+            "startTime": time.time(),
+            "finishTime": None,
+            "errors": [],
+            "_cancel_event": cancel_event,
+            "_dir_map": {},
+            "_last_speed_check": [time.time(), 0]
+        }
+
+        # Step 1: Create root folder on Guangyapan
+        root_cloud_id = self.client.get_or_create_folder(folder_name, parent_id=target_parent_id)
+        dir_map = {"": root_cloud_id}
+        cloud_cache = {}
+
+        # Step 2: Create directories
+        sorted_dirs = sorted(directories, key=lambda d: d.count("/"))
+        for rdir in sorted_dirs:
+            rdir = rdir.replace("\\", "/").strip("/")
+            if not rdir:
+                continue
+            parts = rdir.split("/")
+            cur_accum = ""
+            for part in parts:
+                parent_accum = cur_accum
+                cur_accum = (cur_accum + "/" + part).lstrip("/")
+                if cur_accum in dir_map:
+                    continue
+                parent_cid = dir_map.get(parent_accum, root_cloud_id)
+                if parent_cid not in cloud_cache:
+                    cloud_cache[parent_cid] = self.client.list_folder_children_map(parent_cid)
+                existing_subfolders, _ = cloud_cache[parent_cid]
+                part_cid = self.client.get_or_create_folder(part, parent_id=parent_cid, existing_folders=existing_subfolders)
+                dir_map[cur_accum] = part_cid
+                if part_cid not in cloud_cache:
+                    cloud_cache[part_cid] = ({}, {})
+
+        task["_dir_map"] = dir_map
+
+        # Step 3: Check skip list (files already existing on cloud with same size)
+        skip_list = []
+        skipped_bytes = 0
+        for fm in files_meta:
+            rpath = fm.get("relPath", "").replace("\\", "/")
+            fdir = fm.get("dir", "").replace("\\", "/").strip("/")
+            fname = fm.get("name") or os.path.basename(rpath)
+            sz = int(fm.get("size", 0))
+            target_cid = dir_map.get(fdir, root_cloud_id)
+            if target_cid not in cloud_cache:
+                cloud_cache[target_cid] = self.client.list_folder_children_map(target_cid)
+            _, cloud_files = cloud_cache[target_cid]
+            if fname in cloud_files and cloud_files[fname] == sz:
+                skip_list.append(rpath)
+                skipped_bytes += sz
+
+        task["skippedFiles"] = len(skip_list)
+        task["finishedFiles"] = len(skip_list)
+        task["finishedBytes"] = skipped_bytes
+        if task["totalBytes"] > 0:
+            task["overallPercent"] = min(100, int((task["finishedBytes"] / task["totalBytes"]) * 100))
+
+        with self.folder_upload_lock:
+            self.folder_upload_tasks[task_id] = task
+
+        self.log("INFO", "system", f"💻 初始化本机文件夹上传任务: {folder_name} (共 {total_files} 个文件，跳过已有文件 {len(skip_list)} 个)")
+        return {
+            "uploadId": task_id,
+            "dirMap": dir_map,
+            "skipList": skip_list
+        }
+
+    def cancel_upload_task(self, task_id: str) -> bool:
+        with self.folder_upload_lock:
+            if task_id in self.folder_upload_tasks:
+                t = self.folder_upload_tasks[task_id]
+                cancel_ev = t.get("_cancel_event")
+                if cancel_ev:
+                    cancel_ev.set()
+                t["status"] = "cancelled"
+                t["stageText"] = "任务已被用户取消"
+                t["finishTime"] = time.time()
+                self.log("WARN", "system", f"⏹️ 取消了上传任务: {t.get('name') or task_id}")
+                return True
+        with self.upload_lock:
+            if task_id in self.upload_tasks:
+                t = self.upload_tasks[task_id]
+                t["status"] = "cancelled"
+                t["stageText"] = "上传已取消"
+                t["finishTime"] = time.time()
+                self.log("WARN", "system", f"⏹️ 取消了单文件上传任务: {t.get('fileName') or task_id}")
+                return True
+        return False
+
+    def clear_completed_upload_tasks(self) -> int:
+        cleared = 0
+        with self.folder_upload_lock:
+            to_del = [k for k, v in self.folder_upload_tasks.items() if v.get("status") in ("completed", "partially_failed", "cancelled", "failed")]
+            for k in to_del:
+                del self.folder_upload_tasks[k]
+                cleared += 1
+        with self.upload_lock:
+            to_del = [k for k, v in self.upload_tasks.items() if v.get("status") in ("completed", "failed", "cancelled")]
+            for k in to_del:
+                del self.upload_tasks[k]
+                cleared += 1
+        return cleared
+
+    def get_all_upload_tasks(self) -> dict:
+        with self.upload_lock, self.folder_upload_lock:
+            all_tasks = {}
+            # Single file upload tasks
+            for uid, t in self.upload_tasks.items():
+                item = dict(t)
+                item["taskType"] = "file"
+                all_tasks[uid] = item
+            # Folder upload tasks
+            for fid, ft in self.folder_upload_tasks.items():
+                clean_ft = {k: v for k, v in ft.items() if not k.startswith("_")}
+                clean_ft["taskType"] = "folder"
+                all_tasks[fid] = clean_ft
+            return all_tasks
 
     # ================= STRM Gateway & Sync Engine Methods =================
     def save_strm_config(self, new_cfg: dict) -> dict:
@@ -3044,12 +3447,27 @@ HTML_PAGE = """<!DOCTYPE html>
           <!-- File Toolbar -->
           <div class="file-toolbar">
             <div class="toolbar-left">
-              <button class="btn-primary" onclick="openUploadModal()">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M12 5v14M5 12h14"/>
-                </svg>
-                <span>上传文件</span>
-              </button>
+              <div class="dropdown-wrap" style="position: relative; display: inline-block;">
+                <button class="btn-primary" id="uploadDropdownBtn" onclick="toggleUploadDropdown(event)" style="display: inline-flex; align-items: center; gap: 6px;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 5v14M5 12h14"/>
+                  </svg>
+                  <span>上传</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-left: 2px;">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </button>
+                <div class="dropdown-menu" id="uploadDropdownMenu" style="display: none; position: absolute; top: calc(100% + 4px); left: 0; min-width: 156px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.18); z-index: 100; overflow: hidden; padding: 4px 0;">
+                  <button type="button" class="dropdown-item" onclick="openUploadModal(); hideUploadDropdown();" style="display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 14px; background: transparent; border: none; font-size: 13px; font-weight: 500; color: var(--text-main); cursor: pointer; text-align: left; transition: background 0.15s;">
+                    <span style="font-size: 15px;">📄</span>
+                    <span>上传文件</span>
+                  </button>
+                  <button type="button" class="dropdown-item" onclick="openFolderUploadModal(); hideUploadDropdown();" style="display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 14px; background: transparent; border: none; font-size: 13px; font-weight: 500; color: var(--text-main); cursor: pointer; text-align: left; transition: background 0.15s;">
+                    <span style="font-size: 15px;">📁</span>
+                    <span>上传文件夹</span>
+                  </button>
+                </div>
+              </div>
               <button class="btn-secondary" onclick="promptCreateFolder()">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
@@ -3195,28 +3613,66 @@ HTML_PAGE = """<!DOCTYPE html>
         </div>
       </div>
 
-      <!-- VIEW 3: TRANSFERS (NAS LOCAL DOWNLOADS) -->
+      <!-- VIEW 3: TRANSFERS (DOWNLOADS & UPLOADS) -->
       <div class="content-view" id="view-transfers">
         <div class="official-card">
-          <div class="subtabs" style="flex-wrap: wrap; gap: 10px;">
-            <div class="subtabs-left">
-              <button class="subtab-btn active" id="tabDlActiveBtn" onclick="switchTransferTab('active')">正在下载 / 排队中 (<span id="countActiveDl">0</span>)</button>
-              <button class="subtab-btn" id="tabDlDoneBtn" onclick="switchTransferTab('done')">已下载完成 (<span id="countDoneDl">0</span>)</button>
+          <!-- Top Type Switcher: Download vs Upload -->
+          <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border-subtle); padding-bottom: 12px; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
+            <div style="display: flex; gap: 8px;">
+              <button class="btn-primary" id="transferTypeDlBtn" onclick="switchTransferType('download')" style="padding: 6px 16px; font-size: 13px; font-weight: 600; border-radius: 8px;">
+                <span>📥 本地下载</span>
+                <span class="badge" id="badgeActiveDlCount" style="display: none; margin-left: 6px; background: rgba(255,255,255,0.28); color: #fff; border-radius: 10px; padding: 1px 7px; font-size: 11px;">0</span>
+              </button>
+              <button class="btn-secondary" id="transferTypeUpBtn" onclick="switchTransferType('upload')" style="padding: 6px 16px; font-size: 13px; font-weight: 600; border-radius: 8px;">
+                <span>📤 网盘上传</span>
+                <span class="badge" id="badgeActiveUpCount" style="display: none; margin-left: 6px; background: var(--brand); color: #fff; border-radius: 10px; padding: 1px 7px; font-size: 11px;">0</span>
+              </button>
             </div>
-            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            
+            <!-- Download Section Controls -->
+            <div id="transferDlControls" style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
               <div style="display: flex; align-items: center; gap: 6px; background: var(--bg-input); padding: 4px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); font-size: 12.5px;">
-                <span style="color: var(--text-secondary); font-weight: 500;">⚡ 同时下载个数:</span>
+                <span style="color: var(--text-secondary); font-weight: 500;">⚡ 同时下载:</span>
                 <input type="number" id="transferMaxConcurrentInput" min="1" max="16" value="3"
-                  style="width: 54px; height: 26px; text-align: center; font-weight: 700; font-size: 13px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); color: var(--brand); outline: none;"
+                  style="width: 50px; height: 26px; text-align: center; font-weight: 700; font-size: 13px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); color: var(--brand); outline: none;"
                   onchange="updateMaxConcurrentSetting(this.value)">
-                <span style="color: var(--text-muted); font-size: 11.5px;">个 (1~16)</span>
+                <span style="color: var(--text-muted); font-size: 11.5px;">个</span>
               </div>
               <button class="btn-danger btn-sm" id="cancelAllDlBtn" onclick="cancelAllTransfers()" style="display: none;">⏹️ 全部取消</button>
               <button class="btn-outline btn-sm" onclick="clearCompletedDownloads()">清空已完成记录</button>
             </div>
+
+            <!-- Upload Section Controls -->
+            <div id="transferUpControls" style="display: none; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <button class="btn-danger btn-sm" id="cancelAllUpBtn" onclick="cancelAllUploads()" style="display: none;">⏹️ 全部取消</button>
+              <button class="btn-outline btn-sm" onclick="clearCompletedUploads()">清空已完成记录</button>
+            </div>
           </div>
-          <div class="task-list-container" id="transfersListContainer">
-            <div style="text-align: center; color: var(--text-muted); padding: 40px;">暂无下载任务</div>
+
+          <!-- Section 1: DOWNLOAD TASKS -->
+          <div id="transferDownloadSection">
+            <div class="subtabs" style="margin-bottom: 12px; padding: 0;">
+              <div class="subtabs-left">
+                <button class="subtab-btn active" id="tabDlActiveBtn" onclick="switchTransferTab('active')">正在下载 / 排队中 (<span id="countActiveDl">0</span>)</button>
+                <button class="subtab-btn" id="tabDlDoneBtn" onclick="switchTransferTab('done')">已下载完成 (<span id="countDoneDl">0</span>)</button>
+              </div>
+            </div>
+            <div class="task-list-container" id="transfersListContainer">
+              <div style="text-align: center; color: var(--text-muted); padding: 40px;">暂无下载任务</div>
+            </div>
+          </div>
+
+          <!-- Section 2: UPLOAD TASKS -->
+          <div id="transferUploadSection" style="display: none;">
+            <div class="subtabs" style="margin-bottom: 12px; padding: 0;">
+              <div class="subtabs-left">
+                <button class="subtab-btn active" id="tabUpActiveBtn" onclick="switchUploadTransferTab('active')">正在上传 / 传输中 (<span id="countActiveUp">0</span>)</button>
+                <button class="subtab-btn" id="tabUpDoneBtn" onclick="switchUploadTransferTab('done')">已完成上传 (<span id="countDoneUp">0</span>)</button>
+              </div>
+            </div>
+            <div class="task-list-container" id="uploadTransfersListContainer">
+              <div style="text-align: center; color: var(--text-muted); padding: 40px;">暂无上传任务</div>
+            </div>
           </div>
         </div>
       </div>
@@ -3582,7 +4038,7 @@ HTML_PAGE = """<!DOCTYPE html>
             <div class="setting-card">
               <div class="setting-card-title">ℹ️ 应用介绍与更新检查</div>
               <div class="setting-card-desc">
-                当前运行版本: <strong id="aboutCurrentVersion" style="color: var(--brand);">v1.2.3</strong> · 由 <strong>chaos</strong> 专为飞牛 fnOS 深度适配打造。
+                当前运行版本: <strong id="aboutCurrentVersion" style="color: var(--brand);">v1.2.4</strong> · 由 <strong>chaos</strong> 专为飞牛 fnOS 深度适配打造。
               </div>
               <div style="background: var(--bg-input); padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); font-size: 12px; margin-bottom: 4px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; gap: 8px; flex-wrap: wrap;">
@@ -3734,12 +4190,12 @@ HTML_PAGE = """<!DOCTYPE html>
   </div>
 
   <!-- Modal: NAS Folder Picker (Enhanced with All Shares & Intelligent Navigation) -->
-  <div class="modal-backdrop" id="folderPickerModal">
+  <div class="modal-backdrop" id="folderPickerModal" style="z-index: 1060;" onclick="if(event.target===this)closeModal('folderPickerModal')">
     <div class="modal" style="width: 660px; max-width: 95vw; height: 85vh; max-height: 520px;">
       <div class="modal-header">
         <div class="modal-title">
           <span>📂</span>
-          <span>选择 NAS 保存目录</span>
+          <span>选择 NAS 目录 / 文件夹</span>
         </div>
         <button class="close-btn" onclick="closeModal('folderPickerModal')">&times;</button>
       </div>
@@ -3932,7 +4388,7 @@ HTML_PAGE = """<!DOCTYPE html>
   </div>
 
   <!-- Modal: Cloud Drive Destination Folder Picker (保存到 - 复刻光鸭网页版树状目录) -->
-  <div class="modal-backdrop" id="cloudFolderPickerModal" style="z-index: 1050;">
+  <div class="modal-backdrop" id="cloudFolderPickerModal" style="z-index: 1060;" onclick="if(event.target===this)closeModal('cloudFolderPickerModal')">
     <div class="modal" style="width: 560px; max-width: 95vw; height: 85vh; max-height: 520px; border-radius: 14px; padding: 16px 20px; display: flex; flex-direction: column;">
       <!-- Header -->
       <div class="modal-header" style="border-bottom: 1px solid var(--border-subtle); padding: 0 0 10px 0; margin-bottom: 10px; flex-shrink: 0;">
@@ -4029,6 +4485,37 @@ HTML_PAGE = """<!DOCTYPE html>
       <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; border-top: 1px solid var(--border-subtle); padding-top: 12px;">
         <button class="btn-secondary" onclick="closeModal('deleteTransferModal')">取消</button>
         <button class="btn-danger" id="confirmDeleteTransferBtn" onclick="confirmDeleteTransfer()" style="padding: 7px 18px; border-radius: 8px; background: #ef4444; color: white; border: none; font-weight: 600; cursor: pointer;">确定删除</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Create Cloud Folder (新建网盘文件夹) -->
+  <div class="modal-backdrop" id="createCloudFolderModal" style="z-index: 1070;" onclick="if(event.target===this)closeModal('createCloudFolderModal')">
+    <div class="modal" style="width: 440px; max-width: 95vw; border-radius: 14px; padding: 22px;">
+      <div class="modal-header" style="border-bottom: 1px solid var(--border-subtle); padding-bottom: 12px; margin-bottom: 14px;">
+        <div style="display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; color: var(--brand);">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+            <line x1="12" y1="11" x2="12" y2="17"/>
+            <line x1="9" y1="14" x2="15" y2="14"/>
+          </svg>
+          <span id="createCloudFolderModalTitle">新建网盘文件夹</span>
+        </div>
+        <button class="close-btn" onclick="closeModal('createCloudFolderModal')">&times;</button>
+      </div>
+      <div>
+        <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px; word-break: break-all;" id="createCloudFolderModalLocation">
+          创建位置：全部文件
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          <label style="font-size: 13px; font-weight: 500; color: var(--text);">文件夹名称</label>
+          <input type="text" id="createCloudFolderNameInput" class="form-input" placeholder="请输入文件夹名称" maxlength="255" autocomplete="off" style="width: 100%; box-sizing: border-box;" onkeydown="if(event.key==='Enter')submitCreateCloudFolder()" />
+          <div id="createCloudFolderErrorHint" style="font-size: 12px; color: #ef4444; display: none; margin-top: 2px;"></div>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; border-top: 1px solid var(--border-subtle); padding-top: 14px;">
+        <button class="btn-secondary" onclick="closeModal('createCloudFolderModal')">取消</button>
+        <button class="btn-primary" id="submitCreateCloudFolderBtn" onclick="submitCreateCloudFolder()" style="padding: 7px 20px;">确定</button>
       </div>
     </div>
   </div>
@@ -4175,6 +4662,138 @@ HTML_PAGE = """<!DOCTYPE html>
       <div class="modal-footer" style="padding: 14px 24px;">
         <button class="btn-secondary" onclick="closeModal('uploadModal')">关闭</button>
         <button class="btn-primary" id="startUploadBtn" onclick="submitUpload()">开始上传</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Folder Upload (NAS Directory & Browser Directory) -->
+  <div class="modal-backdrop" id="folderUploadModal" onclick="if(event.target===this)closeModal('folderUploadModal')">
+    <div class="modal" style="width: 600px; max-width: 95vw;">
+      <div class="modal-header">
+        <div class="modal-title">
+          <span>📁</span>
+          <span>上传文件夹到光鸭网盘</span>
+        </div>
+        <button class="close-btn" onclick="closeModal('folderUploadModal')">&times;</button>
+      </div>
+      
+      <div class="modal-body" style="padding: 18px 24px; gap: 14px;">
+        <!-- Destination Cloud Folder Picker Row -->
+        <div style="background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+          <div style="display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;">
+            <span style="font-size: 20px; flex-shrink: 0;">📁</span>
+            <div style="min-width: 0; flex: 1;">
+              <div style="font-size: 11px; color: var(--text-muted); line-height: 1.2;">保存到网盘目录：</div>
+              <div id="folderUploadTargetFolderText" style="font-size: 13px; font-weight: 600; color: var(--primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px;">全部文件</div>
+            </div>
+          </div>
+          <button type="button" class="btn-secondary btn-sm" onclick="chooseFolderUploadCloudFolder()" style="flex-shrink: 0; padding: 5px 12px; font-size: 12px; display: flex; align-items: center; gap: 4px; border-radius: 6px;">
+            <span>📂</span>
+            <span>更改目录</span>
+          </button>
+        </div>
+
+        <!-- Source Mode Tabs -->
+        <div class="subtabs" style="margin: 0; padding: 0;">
+          <div class="subtabs-left" style="width: 100%;">
+            <button class="subtab-btn active" id="tabFolderUploadNasBtn" onclick="switchFolderUploadTab('nas')" style="flex: 1; text-align: center;">🖥️ NAS 磁盘文件夹（推荐）</button>
+            <button class="subtab-btn" id="tabFolderUploadBrowserBtn" onclick="switchFolderUploadTab('browser')" style="flex: 1; text-align: center;">💻 本机电脑文件夹</button>
+          </div>
+        </div>
+
+        <!-- Tab 1: NAS Storage Folder -->
+        <div id="folderUploadSectionNas" style="display: flex; flex-direction: column; gap: 8px;">
+          <!-- Selected NAS Folder Card -->
+          <div id="folderUploadNasSelectedCard" style="display: none; padding: 10px 12px; background: var(--bg-card); border: 1px solid var(--primary); border-radius: 10px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+              <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
+                <span style="font-size: 26px; flex-shrink: 0;">📁</span>
+                <div style="min-width: 0; flex: 1;">
+                  <div id="folderUploadNasFolderName" style="font-size: 13.5px; font-weight: 600; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">--</div>
+                  <div style="display: flex; gap: 12px; font-size: 11px; color: var(--text-muted); margin-top: 2px;">
+                    <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px;" id="folderUploadNasFolderPath">/vol1/...</span>
+                  </div>
+                </div>
+              </div>
+              <button type="button" class="btn-secondary btn-sm" onclick="openFolderPicker(handleNasFolderChosen)" style="flex-shrink: 0; padding: 4px 10px; font-size: 12px;">重新选择</button>
+            </div>
+          </div>
+
+          <!-- Empty state button trigger -->
+          <div id="folderUploadNasEmptyCard" onclick="openFolderPicker(handleNasFolderChosen)" style="padding: 18px 14px; border: 2px dashed var(--border); border-radius: 10px; background: var(--bg-input); cursor: pointer; text-align: center; transition: all 0.2s;">
+            <div style="font-size: 28px; margin-bottom: 4px;">🖥️</div>
+            <p style="font-size: 13px; font-weight: 600; color: var(--text-main); margin: 0 0 2px 0;">点击从 NAS 存储中选择要上传的文件夹</p>
+            <span style="font-size: 11px; color: var(--text-muted);">NAS 后台递归遍历扫描目录树，智能秒传并同步入库，不占用个人电脑性能与网络</span>
+          </div>
+
+          <!-- Manual Path Input -->
+          <div style="display: flex; gap: 6px; align-items: center; margin-top: 2px;">
+            <input type="text" id="folderUploadNasManualPath" placeholder="或直接输入/粘贴 NAS 文件夹绝对路径，如 /vol1/1000/MyProject" oninput="handleNasManualFolderPathChange(this.value)" style="flex: 1; height: 32px; font-size: 12px; font-family: monospace; padding: 0 10px; background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; color: var(--text-main);">
+            <button type="button" class="btn-secondary btn-sm" onclick="openFolderPicker(handleNasFolderChosen)" style="height: 32px; padding: 0 10px; font-size: 12px; flex-shrink: 0;">📂 浏览 NAS</button>
+          </div>
+        </div>
+
+        <!-- Tab 2: Browser Local Folder -->
+        <div id="folderUploadSectionBrowser" style="display: none; flex-direction: column; gap: 8px;">
+          <!-- Dropzone -->
+          <div id="folderUploadBrowserDropzone" onclick="document.getElementById('folderUploadBrowserInput').click()" style="padding: 18px 14px; border: 2px dashed var(--border); border-radius: 10px; background: var(--bg-input); cursor: pointer; text-align: center; transition: all 0.2s;">
+            <div style="font-size: 28px; margin-bottom: 4px;">📂</div>
+            <p id="folderUploadBrowserNameText" style="font-size: 13px; font-weight: 500; color: var(--text-main); margin: 0;">点击选择本机电脑上的文件夹</p>
+            <span style="font-size: 11px; color: var(--text-muted); display: block; margin-top: 2px;">选择后自动提取完整子目录结构与文件清单流水线上传</span>
+            <input type="file" id="folderUploadBrowserInput" webkitdirectory directory multiple style="display: none;" onchange="handleBrowserFolderChosen(this)">
+          </div>
+
+          <!-- Selected Card -->
+          <div id="folderUploadBrowserSelectedCard" style="display: none; padding: 10px 12px; background: var(--bg-card); border: 1px solid var(--primary); border-radius: 10px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+              <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
+                <span style="font-size: 26px; flex-shrink: 0;">📁</span>
+                <div style="min-width: 0; flex: 1;">
+                  <div id="folderUploadBrowserFolderName" style="font-size: 13.5px; font-weight: 600; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">--</div>
+                  <div style="display: flex; gap: 12px; font-size: 11px; color: var(--text-muted); margin-top: 2px;">
+                    <span>文件数: <strong id="folderUploadBrowserFileCount" style="color: var(--text-main);">0</strong></span>
+                    <span>总大小: <strong id="folderUploadBrowserTotalSize" style="color: var(--text-main);">--</strong></span>
+                  </div>
+                </div>
+              </div>
+              <button type="button" class="btn-secondary btn-sm" onclick="document.getElementById('folderUploadBrowserInput').click()" style="flex-shrink: 0; padding: 4px 10px; font-size: 12px;">重新选择</button>
+            </div>
+          </div>
+
+          <!-- Staging folder notification card -->
+          <div style="background: var(--bg-subtle); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 8px 12px; display: flex; align-items: flex-start; gap: 8px;">
+            <span style="font-size: 14px; flex-shrink: 0; margin-top: 1px;">💾</span>
+            <div style="flex: 1; min-width: 0; line-height: 1.45;">
+              <div style="font-size: 11.5px; color: var(--text-secondary); font-weight: 600;">流水线传输与 NAS 空间即时释放：</div>
+              <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
+                浏览器按目录树结构逐个流式传输至 NAS，NAS 在完成每个文件的特征哈希与网盘入库后<b>立即彻底删除该临时暂存文件</b>，杜绝暂存堆积占用 NAS 硬盘。
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Progress Section -->
+        <div id="folderUploadProgressSection" style="display: none; padding-top: 4px;">
+          <div class="task-details" style="margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+            <span id="folderUploadStatusLabel" style="font-size: 12.5px; color: var(--text); font-weight: 500;">准备中...</span>
+            <span id="folderUploadPctLabel" style="font-size: 12.5px; font-weight: 700; color: var(--primary);">0%</span>
+          </div>
+          <div class="progress-bar-bg" style="height: 8px; background: var(--bg-subtle); border-radius: 4px; overflow: hidden;">
+            <div class="progress-bar-fill" id="folderUploadProgressBar" style="width: 0%; height: 100%; background: var(--primary); transition: width 0.3s ease;"></div>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11.5px; color: var(--text-muted); margin-top: 6px;">
+            <span id="folderUploadCurrentFileLabel" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 320px;">--</span>
+            <span id="folderUploadStatsLabel" style="font-family: monospace; flex-shrink: 0;">--</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer" style="padding: 14px 24px; display: flex; justify-content: space-between; align-items: center;">
+        <button class="btn-secondary" onclick="closeModal('folderUploadModal')">关闭</button>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn-outline" id="folderUploadBackgroundBtn" onclick="switchToTransfersAfterUploadStart()" style="display: none;">后台运行 (在传输中查看)</button>
+          <button class="btn-primary" id="startFolderUploadBtn" onclick="submitFolderUpload()">开始上传文件夹</button>
+        </div>
       </div>
     </div>
   </div>
@@ -4589,8 +5208,12 @@ HTML_PAGE = """<!DOCTYPE html>
       } else if (viewName === 'transfers') {
         document.getElementById("navTransfers")?.classList.add("active");
         document.getElementById("view-transfers")?.classList.add("active");
-        document.getElementById("breadcrumbs").innerHTML = `<span class="crumb-item current">⬇️ 本地下载与传输任务</span>`;
-        loadTransfers();
+        document.getElementById("breadcrumbs").innerHTML = `<span class="crumb-item current">🔄 传输任务中心 (下载与上传)</span>`;
+        if (currentTransferType === 'download') {
+          loadTransfers();
+        } else {
+          loadUploadTransfers();
+        }
       } else if (viewName === 'offline') {
         document.getElementById("navOffline")?.classList.add("active");
         document.getElementById("view-offline")?.classList.add("active");
@@ -4621,7 +5244,10 @@ HTML_PAGE = """<!DOCTYPE html>
 
     function refreshCurrentView() {
       if (currentView === 'files') loadFiles(currentParentId);
-      else if (currentView === 'transfers') loadTransfers();
+      else if (currentView === 'transfers') {
+        if (currentTransferType === 'download') loadTransfers();
+        else loadUploadTransfers();
+      }
       else if (currentView === 'offline') loadCloudTasks();
       else if (currentView === 'strm') loadStrmView(true);
       else if (currentView === 'logs') loadLogs(true);
@@ -5107,25 +5733,127 @@ function escapeHtml(str) {
       loadFiles(id);
     }
 
-    async function promptCreateFolder() {
-      const name = prompt("请输入新文件夹名称：");
-      if (!name || !name.trim()) return;
+    let createFolderContext = 'files'; // 'files' or 'tree'
+    let createFolderTargetParentId = '';
+
+    function openCreateFolderModal(context = 'files') {
+      createFolderContext = context;
+      const input = document.getElementById("createCloudFolderNameInput");
+      const errEl = document.getElementById("createCloudFolderErrorHint");
+      const locEl = document.getElementById("createCloudFolderModalLocation");
+      const titleEl = document.getElementById("createCloudFolderModalTitle");
+      if (errEl) {
+        errEl.innerText = "";
+        errEl.style.display = "none";
+      }
+      if (input) {
+        input.value = "";
+      }
+      if (context === 'tree') {
+        createFolderTargetParentId = cloudTreeSelectedId || "";
+        const curPath = cloudTreeSelectedPath || "全部文件";
+        if (titleEl) titleEl.innerText = "新建网盘文件夹";
+        if (locEl) locEl.innerText = `创建位置：${curPath}`;
+      } else {
+        createFolderTargetParentId = currentParentId || "";
+        const curPath = (breadcrumbStack && breadcrumbStack.length > 0) ? breadcrumbStack.map(b => b.name).join("/") : "全部文件";
+        if (titleEl) titleEl.innerText = "新建网盘文件夹";
+        if (locEl) locEl.innerText = `创建位置：${curPath}`;
+      }
+      openModal("createCloudFolderModal");
+      setTimeout(() => {
+        if (input) {
+          input.focus();
+        }
+      }, 60);
+    }
+
+    async function submitCreateCloudFolder() {
+      const input = document.getElementById("createCloudFolderNameInput");
+      const errEl = document.getElementById("createCloudFolderErrorHint");
+      const btn = document.getElementById("submitCreateCloudFolderBtn");
+      const name = (input ? input.value : "").trim();
+      
+      if (!name) {
+        if (errEl) {
+          errEl.innerText = "文件夹名称不能为空";
+          errEl.style.display = "block";
+        }
+        if (input) input.focus();
+        return;
+      }
+      if (/[<>:"/\\|?*]/.test(name)) {
+        if (errEl) {
+          errEl.innerText = '文件夹名称不能包含字符: < > : " / \\ | ? *';
+          errEl.style.display = "block";
+        }
+        if (input) input.focus();
+        return;
+      }
+
+      if (btn) {
+        btn.disabled = true;
+        btn.innerText = "创建中...";
+      }
+      if (errEl) {
+        errEl.innerText = "";
+        errEl.style.display = "none";
+      }
+
       try {
         const res = await fetch("/api/create-folder", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: name.trim(), parentId: currentParentId })
+          body: JSON.stringify({ name: name, parentId: createFolderTargetParentId })
         });
         const d = await res.json();
         if (d.msg === "success" || d.code === 0) {
           showToast("文件夹创建成功");
-          loadFiles();
+          closeModal("createCloudFolderModal");
+          if (createFolderContext === 'tree') {
+            const pid = createFolderTargetParentId;
+            delete cloudTreeData[pid];
+            cloudTreeExpanded[pid] = true;
+            await loadTreeFolderChildren(pid);
+            const children = cloudTreeData[pid] || [];
+            const newFolder = (d.data && d.data.fileId) 
+              ? children.find(c => c.fileId === d.data.fileId) 
+              : children.find(c => c.fileName === name);
+            if (newFolder) {
+              cloudTreeSelectedId = newFolder.fileId;
+              cloudTreeSelectedPath = getCloudFolderPath(newFolder.fileId);
+            }
+            updateTreeLocationDisplay();
+            renderCloudFolderTree();
+          } else {
+            loadFiles();
+          }
         } else {
-          alert("创建失败: " + (d.msg || JSON.stringify(d)));
+          const errMsg = d.msg || d.error || (d.code === 159 ? "同名文件夹已存在" : "创建失败");
+          if (errEl) {
+            errEl.innerText = errMsg;
+            errEl.style.display = "block";
+          } else {
+            showToast("创建失败: " + errMsg);
+          }
         }
       } catch (e) {
-        alert("网络错误: " + e.message);
+        if (errEl) {
+          errEl.innerText = "网络错误: " + e.message;
+          errEl.style.display = "block";
+        } else {
+          showToast("网络错误: " + e.message);
+        }
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerText = "确定";
+        }
       }
+    }
+
+    function promptCreateFolder() {
+      openCreateFolderModal('files');
     }
 
     async function deleteFile(fileId, name) {
@@ -5630,7 +6358,11 @@ function escapeHtml(str) {
 
     async function folderPickerMkdir() {
       const targetDir = folderPickerPath || folderPickerSelectedPath || defaultDownloadDir || "";
-      const name = prompt(`在 ${targetDir || '当前位置'} 下新建文件夹名称：`);
+      if (!targetDir) {
+        showToast("请先选择一个存储卷或共享目录（如 /vol1/...）后再新建文件夹");
+        return;
+      }
+      const name = prompt(`在 ${targetDir} 下新建文件夹名称：`);
       if (!name || !name.trim()) return;
       const newPath = (targetDir.endsWith("/") ? targetDir : targetDir + "/") + name.trim();
       try {
@@ -5672,6 +6404,231 @@ function escapeHtml(str) {
       renderTransfers();
     }
 
+    let currentTransferType = 'download'; // 'download' or 'upload'
+    let currentUploadTransferTab = 'active'; // 'active' or 'done'
+    let uploadTasksMap = {};
+
+    function switchTransferType(type) {
+      currentTransferType = type;
+      const dlBtn = document.getElementById("transferTypeDlBtn");
+      const upBtn = document.getElementById("transferTypeUpBtn");
+      const dlSection = document.getElementById("transferDownloadSection");
+      const upSection = document.getElementById("transferUploadSection");
+      const dlControls = document.getElementById("transferDlControls");
+      const upControls = document.getElementById("transferUpControls");
+
+      if (type === 'download') {
+        if (dlBtn) { dlBtn.className = "btn-primary"; }
+        if (upBtn) { upBtn.className = "btn-secondary"; }
+        if (dlSection) dlSection.style.display = "block";
+        if (upSection) upSection.style.display = "none";
+        if (dlControls) dlControls.style.display = "flex";
+        if (upControls) upControls.style.display = "none";
+        loadTransfers();
+      } else {
+        if (dlBtn) { dlBtn.className = "btn-secondary"; }
+        if (upBtn) { upBtn.className = "btn-primary"; }
+        if (dlSection) dlSection.style.display = "none";
+        if (upSection) upSection.style.display = "block";
+        if (dlControls) dlControls.style.display = "none";
+        if (upControls) upControls.style.display = "flex";
+        loadUploadTransfers();
+      }
+    }
+
+    function switchUploadTransferTab(tab) {
+      currentUploadTransferTab = tab;
+      const actBtn = document.getElementById("tabUpActiveBtn");
+      const doneBtn = document.getElementById("tabUpDoneBtn");
+      if (tab === 'active') {
+        if (actBtn) actBtn.classList.add("active");
+        if (doneBtn) doneBtn.classList.remove("active");
+      } else {
+        if (actBtn) actBtn.classList.remove("active");
+        if (doneBtn) doneBtn.classList.add("active");
+      }
+      renderUploadTransfers();
+    }
+
+    async function loadUploadTransfers() {
+      try {
+        const res = await fetch("/api/transfers/uploads");
+        if (!res.ok) return;
+        uploadTasksMap = await res.json();
+        renderUploadTransfers();
+      } catch (e) {
+        console.error("Failed to load upload transfers:", e);
+      }
+    }
+
+    function renderUploadTransfers() {
+      const c = document.getElementById("uploadTransfersListContainer");
+      if (!c) return;
+      const list = Object.values(uploadTasksMap);
+
+      const activeList = list.filter(t => t.status === "running" || t.status === "pending" || t.status === "scanning" || t.status === "creating_tree" || t.status === "uploading");
+      const doneList = list.filter(t => t.status === "completed" || t.status === "partially_failed" || t.status === "failed" || t.status === "cancelled");
+
+      activeList.sort((a, b) => (a.startTime || 0) - (b.startTime || 0));
+      doneList.sort((a, b) => (b.finishTime || b.startTime || 0) - (a.finishTime || a.startTime || 0));
+
+      const countActiveUp = document.getElementById("countActiveUp");
+      if (countActiveUp) countActiveUp.innerText = activeList.length;
+      const countDoneUp = document.getElementById("countDoneUp");
+      if (countDoneUp) countDoneUp.innerText = doneList.length;
+
+      const badgeActiveUp = document.getElementById("badgeActiveUpCount");
+      if (badgeActiveUp) {
+        if (activeList.length > 0) {
+          badgeActiveUp.style.display = "inline-flex";
+          badgeActiveUp.innerText = activeList.length;
+        } else {
+          badgeActiveUp.style.display = "none";
+        }
+      }
+
+      const cancelAllUpBtn = document.getElementById("cancelAllUpBtn");
+      if (cancelAllUpBtn) {
+        cancelAllUpBtn.style.display = (activeList.length > 0) ? "inline-flex" : "none";
+      }
+
+      // Update combined badge on the navigation rail
+      const activeDlCount = parseInt(document.getElementById("countActiveDl")?.innerText || "0", 10);
+      const totalActive = activeDlCount + activeList.length;
+      const railBadge = document.getElementById("activeDlBadge");
+      if (railBadge) {
+        if (totalActive > 0) {
+          railBadge.style.display = "inline-flex";
+          railBadge.innerText = totalActive;
+        } else {
+          railBadge.style.display = "none";
+        }
+      }
+
+      const displayList = (currentUploadTransferTab === 'active') ? activeList : doneList;
+
+      if (displayList.length === 0) {
+        c.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 50px;">暂无${currentUploadTransferTab === 'active' ? '正在进行的上传任务' : '已完成上传记录'}</div>`;
+        return;
+      }
+
+      c.innerHTML = "";
+      displayList.forEach(t => {
+        const isFolder = (t.taskType === "folder");
+        const isDone = (t.status === "completed");
+        const isPartFailed = (t.status === "partially_failed");
+        const isFailed = (t.status === "failed");
+        const isCancelled = (t.status === "cancelled");
+        const isRunning = !isDone && !isPartFailed && !isFailed && !isCancelled;
+
+        let badgeClass = "status-active";
+        let statusText = "传输中";
+        if (isDone) { badgeClass = "status-success"; statusText = "已完成"; }
+        else if (isPartFailed) { badgeClass = "status-warning"; statusText = "部分成功"; }
+        else if (isCancelled) { badgeClass = "status-dim"; statusText = "已取消"; }
+        else if (isFailed) { badgeClass = "status-danger"; statusText = "失败"; }
+
+        const title = isFolder ? (t.name || "未命名文件夹") : (t.fileName || "未命名文件");
+        const icon = isFolder ? "📁" : getFileIcon(title);
+        const sourceBadge = isFolder ? (t.source === "nas" ? "🖥️ NAS 磁盘" : "💻 本机电脑") : "文件";
+
+        let pct = isFolder ? (t.overallPercent || 0) : (t.percent || 0);
+        if (isDone) pct = 100;
+
+        let infoLine = "";
+        if (isFolder) {
+          infoLine = `已同步: <strong>${t.finishedFiles || 0} / ${t.totalFiles || 0}</strong> 文件 (${formatBytes(t.finishedBytes || 0)} / ${formatBytes(t.totalBytes || 0)})`;
+          if (isRunning && t.speed && t.speed !== "0 KB/s") {
+            infoLine += ` · <span style="color: var(--primary); font-weight: 600;">⚡ ${t.speed}</span>`;
+          }
+          if (t.skippedFiles > 0) {
+            infoLine += ` · 秒传跳过: ${t.skippedFiles}`;
+          }
+          if (t.failedFiles > 0) {
+            infoLine += ` · <span style="color: #ef4444;">失败: ${t.failedFiles}</span>`;
+          }
+        } else {
+          infoLine = `${formatBytes(t.uploadedBytes || 0)} / ${formatBytes(t.fileSize || 0)}`;
+          if (t.stageText) {
+            infoLine += ` · ${escapeHtml(t.stageText)}`;
+          }
+        }
+
+        const div = document.createElement("div");
+        div.className = "transfer-card";
+        div.style.cssText = "padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card); margin-bottom: 10px; display: flex; flex-direction: column; gap: 8px;";
+        div.innerHTML = `
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
+              <span style="font-size: 22px; flex-shrink: 0;">${icon}</span>
+              <div style="min-width: 0; flex: 1;">
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  <span style="font-size: 13.5px; font-weight: 600; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(title)}">${escapeHtml(title)}</span>
+                  <span class="badge" style="font-size: 10.5px; padding: 1px 6px; border-radius: 4px; background: var(--bg-subtle); color: var(--text-muted);">${sourceBadge}</span>
+                </div>
+                <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 3px;">
+                  ${infoLine}
+                </div>
+                ${(isRunning && isFolder && t.currentFile) ? `<div style="font-size: 11px; color: var(--text-dim); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">当前文件: ${escapeHtml(t.currentFile)}</div>` : ''}
+              </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 10px; flex-shrink: 0;">
+              <span class="status-badge ${badgeClass}" style="font-size: 11.5px;">${statusText}</span>
+              ${isRunning ? `<button type="button" class="btn-danger btn-sm" onclick="cancelUploadTask('${t.id}')" style="padding: 3px 8px; font-size: 11.5px;">⏹️ 取消</button>` : ''}
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <div class="progress-bar-bg" style="flex: 1; height: 6px; background: var(--bg-subtle); border-radius: 3px; overflow: hidden;">
+              <div class="progress-bar-fill" style="width: ${pct}%; height: 100%; background: var(--primary); transition: width 0.3s ease;"></div>
+            </div>
+            <span style="font-size: 11.5px; font-weight: 700; color: var(--primary); width: 36px; text-align: right;">${pct}%</span>
+          </div>
+        `;
+        c.appendChild(div);
+      });
+    }
+
+    async function cancelUploadTask(taskId) {
+      if (!confirm("确定要取消此上传任务吗？")) return;
+      try {
+        await fetch("/api/upload/cancel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ uploadId: taskId })
+        });
+        showToast("已发起取消上传请求");
+        loadUploadTransfers();
+      } catch (e) {
+        alert("取消失败: " + e.message);
+      }
+    }
+
+    async function cancelAllUploads() {
+      if (!confirm("确定要取消所有正在进行的上传任务吗？")) return;
+      const list = Object.values(uploadTasksMap).filter(t => t.status === "running" || t.status === "pending" || t.status === "uploading" || t.status === "scanning");
+      for (const t of list) {
+        try {
+          await fetch("/api/upload/cancel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ uploadId: t.id })
+          });
+        } catch (e) {}
+      }
+      showToast("已请求取消全部上传任务");
+      loadUploadTransfers();
+    }
+
+    async function clearCompletedUploads() {
+      try {
+        await fetch("/api/upload/clear-completed", { method: "POST" });
+        showToast("已清空已完成记录");
+        loadUploadTransfers();
+      } catch (e) {
+        alert("清空记录失败: " + e.message);
+      }
+    }
+
     let transferPollingTimer = null;
     let localDownloadsMap = {};
 
@@ -5680,6 +6637,8 @@ function escapeHtml(str) {
         const res = await fetch("/api/transfers");
         localDownloadsMap = await res.json();
         renderTransfers();
+        // Also sync upload transfers counts
+        loadUploadTransfers();
       } catch (e) {
         console.error("Failed to load transfers:", e);
       }
@@ -5706,16 +6665,29 @@ function escapeHtml(str) {
       document.getElementById("countActiveDl").innerText = activeList.length;
       document.getElementById("countDoneDl").innerText = doneList.length;
 
+      const badgeActiveDlCount = document.getElementById("badgeActiveDlCount");
+      if (badgeActiveDlCount) {
+        if (activeList.length > 0) {
+          badgeActiveDlCount.style.display = "inline-flex";
+          badgeActiveDlCount.innerText = activeList.length;
+        } else {
+          badgeActiveDlCount.style.display = "none";
+        }
+      }
+
       const cancelAllBtn = document.getElementById("cancelAllDlBtn");
       if (cancelAllBtn) {
         cancelAllBtn.style.display = (activeList.length > 0) ? "inline-flex" : "none";
       }
 
+      // Update total rail transfers badge
+      const activeUpCount = Object.values(uploadTasksMap).filter(t => t.status === "running" || t.status === "pending" || t.status === "scanning" || t.status === "uploading").length;
+      const totalActive = activeList.length + activeUpCount;
       const badge = document.getElementById("activeDlBadge");
       if (badge) {
-        if (activeList.length > 0) {
+        if (totalActive > 0) {
           badge.style.display = "inline-flex";
-          badge.innerText = activeList.length;
+          badge.innerText = totalActive;
         } else {
           badge.style.display = "none";
         }
@@ -6787,38 +7759,8 @@ function escapeHtml(str) {
       renderCloudFolderTree();
     }
 
-    async function promptCreateFolderInTree() {
-      const targetParentId = cloudTreeSelectedId || "";
-      const currentPath = cloudTreeSelectedPath || "全部文件";
-      const name = prompt(`在 “${currentPath}” 目录下新建文件夹：`);
-      if (!name || !name.trim()) return;
-
-      try {
-        const res = await fetch("/api/create-folder", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: name.trim(), parentId: targetParentId })
-        });
-        const d = await res.json();
-        if (d.msg === "success" || d.code === 0) {
-          showToast("新建文件夹成功");
-          delete cloudTreeData[targetParentId];
-          cloudTreeExpanded[targetParentId] = true;
-          await loadTreeFolderChildren(targetParentId);
-          const children = cloudTreeData[targetParentId] || [];
-          const newFolder = children.find(c => c.fileName === name.trim());
-          if (newFolder) {
-            cloudTreeSelectedId = newFolder.fileId;
-            cloudTreeSelectedPath = getCloudFolderPath(newFolder.fileId);
-          }
-          updateTreeLocationDisplay();
-          renderCloudFolderTree();
-        } else {
-          alert("新建失败: " + (d.msg || JSON.stringify(d)));
-        }
-      } catch (e) {
-        alert("网络异常: " + e.message);
-      }
+    function promptCreateFolderInTree() {
+      openCreateFolderModal('tree');
     }
 
     function confirmCloudFolderTreeSelection() {
@@ -7635,6 +8577,408 @@ function escapeHtml(str) {
       }, 700);
     }
 
+    // ================= FOLDER UPLOAD (NAS & LOCAL BROWSER) =================
+    let folderUploadTargetParentId = "";
+    let folderUploadTargetFolderPath = "全部文件";
+    let activeFolderUploadTab = "nas";
+    let selectedNasFolder = null;
+    let selectedBrowserFolderData = null; // { folderName, totalFiles, totalBytes, directories, files }
+    let folderUploadPollTimer = null;
+    let isBrowserFolderUploading = false;
+    let browserFolderCancelRequested = false;
+
+    function toggleUploadDropdown(e) {
+      if (e) e.stopPropagation();
+      const m = document.getElementById("uploadDropdownMenu");
+      if (!m) return;
+      m.style.display = (m.style.display === "block") ? "none" : "block";
+    }
+
+    function hideUploadDropdown() {
+      const m = document.getElementById("uploadDropdownMenu");
+      if (m) m.style.display = "none";
+    }
+
+    window.addEventListener("click", () => {
+      hideUploadDropdown();
+    });
+
+    function openFolderUploadModal() {
+      if (currentParentId && currentParentId !== "") {
+        folderUploadTargetParentId = currentParentId;
+        folderUploadTargetFolderPath = (breadcrumbStack && breadcrumbStack.length > 0)
+          ? breadcrumbStack.map(b => b.name).join("/")
+          : "当前网盘目录";
+      } else {
+        folderUploadTargetParentId = "";
+        folderUploadTargetFolderPath = "全部文件";
+      }
+
+      const tfEl = document.getElementById("folderUploadTargetFolderText");
+      if (tfEl) tfEl.innerText = folderUploadTargetFolderPath;
+
+      // Reset states
+      selectedNasFolder = null;
+      selectedBrowserFolderData = null;
+      isBrowserFolderUploading = false;
+      browserFolderCancelRequested = false;
+      if (folderUploadPollTimer) {
+        clearInterval(folderUploadPollTimer);
+        folderUploadPollTimer = null;
+      }
+
+      document.getElementById("folderUploadNasSelectedCard").style.display = "none";
+      document.getElementById("folderUploadNasEmptyCard").style.display = "block";
+      const nasManual = document.getElementById("folderUploadNasManualPath");
+      if (nasManual) nasManual.value = "";
+
+      document.getElementById("folderUploadBrowserDropzone").style.display = "block";
+      document.getElementById("folderUploadBrowserSelectedCard").style.display = "none";
+      const browserInput = document.getElementById("folderUploadBrowserInput");
+      if (browserInput) browserInput.value = "";
+
+      document.getElementById("folderUploadProgressSection").style.display = "none";
+      document.getElementById("startFolderUploadBtn").disabled = false;
+      document.getElementById("folderUploadBackgroundBtn").style.display = "none";
+
+      switchFolderUploadTab("nas");
+      openModal("folderUploadModal");
+    }
+
+    function chooseFolderUploadCloudFolder() {
+      openCloudFolderPickerModal((selId, selPath) => {
+        folderUploadTargetParentId = selId;
+        folderUploadTargetFolderPath = selPath;
+        const tfEl = document.getElementById("folderUploadTargetFolderText");
+        if (tfEl) tfEl.innerText = selPath;
+      }, folderUploadTargetParentId, folderUploadTargetFolderPath);
+    }
+
+    function switchFolderUploadTab(tab) {
+      activeFolderUploadTab = tab;
+      const nasBtn = document.getElementById("tabFolderUploadNasBtn");
+      const browserBtn = document.getElementById("tabFolderUploadBrowserBtn");
+      const nasSec = document.getElementById("folderUploadSectionNas");
+      const browserSec = document.getElementById("folderUploadSectionBrowser");
+
+      if (tab === "nas") {
+        if (nasBtn) nasBtn.classList.add("active");
+        if (browserBtn) browserBtn.classList.remove("active");
+        if (nasSec) nasSec.style.display = "flex";
+        if (browserSec) browserSec.style.display = "none";
+      } else {
+        if (browserBtn) browserBtn.classList.add("active");
+        if (nasBtn) nasBtn.classList.remove("active");
+        if (browserSec) browserSec.style.display = "flex";
+        if (nasSec) nasSec.style.display = "none";
+      }
+    }
+
+    function handleNasFolderChosen(folderPath) {
+      if (!folderPath) return;
+      let cleanPath = (folderPath || "").trim();
+      while (cleanPath.length > 0 && (cleanPath.charAt(cleanPath.length - 1) === "/" || cleanPath.charCodeAt(cleanPath.length - 1) === 92)) {
+        cleanPath = cleanPath.slice(0, -1);
+      }
+      const folderName = cleanPath.split("/").filter(Boolean).pop() || "文件夹";
+      selectedNasFolder = { path: cleanPath, name: folderName };
+      document.getElementById("folderUploadNasFolderName").innerText = folderName;
+      document.getElementById("folderUploadNasFolderPath").innerText = cleanPath;
+      document.getElementById("folderUploadNasManualPath").value = cleanPath;
+
+      document.getElementById("folderUploadNasSelectedCard").style.display = "block";
+      document.getElementById("folderUploadNasEmptyCard").style.display = "none";
+    }
+
+    function handleNasManualFolderPathChange(path) {
+      let val = (path || "").trim();
+      while (val.length > 0 && (val.charAt(val.length - 1) === "/" || val.charCodeAt(val.length - 1) === 92)) {
+        val = val.slice(0, -1);
+      }
+      if (!val) {
+        selectedNasFolder = null;
+        document.getElementById("folderUploadNasSelectedCard").style.display = "none";
+        document.getElementById("folderUploadNasEmptyCard").style.display = "block";
+        return;
+      }
+      const folderName = val.split("/").filter(Boolean).pop() || "文件夹";
+      selectedNasFolder = { path: val, name: folderName };
+      document.getElementById("folderUploadNasFolderName").innerText = folderName;
+      document.getElementById("folderUploadNasFolderPath").innerText = val;
+      document.getElementById("folderUploadNasSelectedCard").style.display = "block";
+      document.getElementById("folderUploadNasEmptyCard").style.display = "none";
+    }
+
+    const IGNORED_ENTRIES_SET = new Set([
+      "@eaDir", ".DS_Store", "Thumbs.db", "desktop.ini", ".git", ".svn",
+      ".hg", "__MACOSX", ".upload_tmp_", ".stversions", ".debris"
+    ]);
+
+    function isIgnoredPathPart(name) {
+      if (!name) return true;
+      if (IGNORED_ENTRIES_SET.has(name)) return true;
+      if (name.startsWith("._") || name.startsWith(".upload_tmp_")) return true;
+      return false;
+    }
+
+    function handleBrowserFolderChosen(input) {
+      if (!input.files || input.files.length === 0) return;
+
+      const rawFiles = Array.from(input.files);
+      const validFiles = [];
+      const dirSet = new Set();
+      let totalBytes = 0;
+      let rootFolderName = "";
+
+      for (const file of rawFiles) {
+        const relPath = (file.webkitRelativePath || file.name).split(String.fromCharCode(92)).join("/");
+        const parts = relPath.split("/").filter(Boolean);
+        if (parts.length === 0) continue;
+
+        if (!rootFolderName) rootFolderName = parts[0];
+
+        // Check if any path component is ignored
+        const hasIgnored = parts.some(p => isIgnoredPathPart(p));
+        if (hasIgnored) continue;
+
+        // Subdirectories relative to root folder
+        const relParts = parts.slice(1);
+        if (relParts.length > 1) {
+          let accum = "";
+          for (let i = 0; i < relParts.length - 1; i++) {
+            accum = (accum + "/" + relParts[i]).replace(/^[/]/, "");
+            dirSet.add(accum);
+          }
+        }
+
+        const fileName = parts[parts.length - 1];
+        const dirRel = relParts.length > 1 ? relParts.slice(0, -1).join("/") : "";
+        validFiles.push({
+          relPath: relParts.join("/"),
+          dir: dirRel,
+          name: fileName,
+          size: file.size,
+          fileObj: file
+        });
+        totalBytes += file.size;
+      }
+
+      if (validFiles.length === 0) {
+        alert("所选文件夹为空或仅包含被过滤的系统隐藏文件");
+        return;
+      }
+
+      selectedBrowserFolderData = {
+        folderName: rootFolderName || "新建文件夹",
+        totalFiles: validFiles.length,
+        totalBytes: totalBytes,
+        directories: Array.from(dirSet),
+        files: validFiles
+      };
+
+      document.getElementById("folderUploadBrowserFolderName").innerText = selectedBrowserFolderData.folderName;
+      document.getElementById("folderUploadBrowserFileCount").innerText = selectedBrowserFolderData.totalFiles;
+      document.getElementById("folderUploadBrowserTotalSize").innerText = formatBytes(selectedBrowserFolderData.totalBytes);
+
+      document.getElementById("folderUploadBrowserDropzone").style.display = "none";
+      document.getElementById("folderUploadBrowserSelectedCard").style.display = "block";
+    }
+
+    async function submitFolderUpload() {
+      if (activeFolderUploadTab === "nas") {
+        if (!selectedNasFolder || !selectedNasFolder.path) {
+          alert("请先选择 NAS 上的文件夹");
+          return;
+        }
+
+        document.getElementById("startFolderUploadBtn").disabled = true;
+        document.getElementById("folderUploadProgressSection").style.display = "block";
+        document.getElementById("folderUploadStatusLabel").innerText = "正在发起 NAS 文件夹扫描与建树...";
+        document.getElementById("folderUploadProgressBar").style.width = "5%";
+        document.getElementById("folderUploadPctLabel").innerText = "5%";
+        document.getElementById("folderUploadBackgroundBtn").style.display = "inline-flex";
+
+        try {
+          const res = await fetch("/api/upload/folder", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              nasPath: selectedNasFolder.path,
+              parentId: folderUploadTargetParentId || ""
+            })
+          });
+          const data = await res.json();
+          if (!res.ok || data.error) {
+            throw new Error(data.error || "发起上传失败");
+          }
+          pollFolderUploadProgress(data.uploadId, false);
+        } catch (err) {
+          alert("发起文件夹上传出错: " + err.message);
+          document.getElementById("startFolderUploadBtn").disabled = false;
+        }
+      } else {
+        // Browser Folder Upload
+        if (!selectedBrowserFolderData || !selectedBrowserFolderData.files || selectedBrowserFolderData.files.length === 0) {
+          alert("请先选择本机文件夹");
+          return;
+        }
+
+        document.getElementById("startFolderUploadBtn").disabled = true;
+        document.getElementById("folderUploadProgressSection").style.display = "block";
+        document.getElementById("folderUploadStatusLabel").innerText = "正在同步网盘目录层级...";
+        document.getElementById("folderUploadProgressBar").style.width = "3%";
+        document.getElementById("folderUploadPctLabel").innerText = "3%";
+        document.getElementById("folderUploadBackgroundBtn").style.display = "inline-flex";
+
+        try {
+          // 1. Init browser folder upload & build cloud directory tree
+          const filesMeta = selectedBrowserFolderData.files.map(f => ({
+            relPath: f.relPath,
+            dir: f.dir,
+            name: f.name,
+            size: f.size
+          }));
+
+          const initRes = await fetch("/api/upload/folder/init-browser", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              folderName: selectedBrowserFolderData.folderName,
+              parentId: folderUploadTargetParentId || "",
+              totalFiles: selectedBrowserFolderData.totalFiles,
+              totalBytes: selectedBrowserFolderData.totalBytes,
+              directories: selectedBrowserFolderData.directories,
+              files: filesMeta
+            })
+          });
+          const initData = await initRes.json();
+          if (!initRes.ok || initData.error) {
+            throw new Error(initData.error || "初始化目录树失败");
+          }
+
+          const uploadId = initData.uploadId;
+          const dirMap = initData.dirMap || {};
+          const skipSet = new Set(initData.skipList || []);
+          const rootCloudId = dirMap[""] || folderUploadTargetParentId || "";
+
+          // Start polling overall status
+          pollFolderUploadProgress(uploadId, true);
+
+          // 2. Stream files pipeline to NAS (files uploaded and purged one by one)
+          isBrowserFolderUploading = true;
+          browserFolderCancelRequested = false;
+
+          const toUpload = selectedBrowserFolderData.files.filter(f => !skipSet.has(f.relPath));
+
+          // Upload sequentially in pipeline
+          for (let i = 0; i < toUpload.length; i++) {
+            if (browserFolderCancelRequested) {
+              break;
+            }
+            const item = toUpload[i];
+            const targetParentId = dirMap[item.dir] || rootCloudId;
+            const formData = new FormData();
+            formData.append("uploadId", uploadId);
+            formData.append("relPath", item.relPath);
+            formData.append("parentId", targetParentId);
+            formData.append("file", item.fileObj);
+
+            const curFileEl = document.getElementById("folderUploadCurrentFileLabel");
+            if (curFileEl) curFileEl.innerText = `正在传输 (${i + 1}/${toUpload.length}): ${item.relPath}`;
+            const statusEl = document.getElementById("folderUploadStatusLabel");
+            if (statusEl) statusEl.innerText = `正在传输文件 (${i + 1}/${toUpload.length})...`;
+
+            const curPct = Math.max(5, Math.round(((i) / toUpload.length) * 100));
+            document.getElementById("folderUploadProgressBar").style.width = curPct + "%";
+            document.getElementById("folderUploadPctLabel").innerText = curPct + "%";
+
+            try {
+              const fRes = await fetch("/api/upload/folder/browser-file", {
+                method: "POST",
+                body: formData
+              });
+              if (!fRes.ok) {
+                console.warn(`File upload failed: ${item.relPath}`);
+              }
+            } catch (e) {
+              console.warn(`File network error: ${item.relPath}`, e);
+            }
+          }
+
+          // 3. Mark finish
+          try {
+            await fetch("/api/upload/folder/finish-browser", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ uploadId: uploadId })
+            });
+          } catch (e) {
+            console.warn("finish-browser error:", e);
+          }
+
+        } catch (err) {
+          alert("本机文件夹上传出错: " + err.message);
+          document.getElementById("startFolderUploadBtn").disabled = false;
+        }
+      }
+    }
+
+    function pollFolderUploadProgress(uploadId, isBrowser = false) {
+      if (folderUploadPollTimer) clearInterval(folderUploadPollTimer);
+      folderUploadPollTimer = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/upload/folder/status?uploadId=${encodeURIComponent(uploadId)}`);
+          if (!res.ok) return;
+          const data = await res.json();
+
+          const rawPct = data.overallPercent || 0;
+          document.getElementById("folderUploadProgressBar").style.width = rawPct + "%";
+          document.getElementById("folderUploadPctLabel").innerText = rawPct + "%";
+
+          if (data.stageText) {
+            document.getElementById("folderUploadStatusLabel").innerText = data.stageText;
+          }
+          if (data.currentFile) {
+            document.getElementById("folderUploadCurrentFileLabel").innerText = `当前文件: ${data.currentFile} (${data.currentFilePercent || 0}%)`;
+          }
+          if (data.totalFiles) {
+            document.getElementById("folderUploadStatsLabel").innerText = `${data.finishedFiles || 0}/${data.totalFiles} 文件 · ${data.speed || '0 KB/s'}`;
+          }
+
+          if (data.status === "completed" || data.status === "partially_failed") {
+            clearInterval(folderUploadPollTimer);
+            folderUploadPollTimer = null;
+            isBrowserFolderUploading = false;
+            document.getElementById("startFolderUploadBtn").disabled = false;
+            document.getElementById("folderUploadProgressBar").style.width = "100%";
+            document.getElementById("folderUploadPctLabel").innerText = "100%";
+            const succMsg = (data.status === "completed") ? "✅ 文件夹全部文件入库成功！" : "⚠️ 文件夹上传完成（部分文件失败，已记录）";
+            document.getElementById("folderUploadStatusLabel").innerText = succMsg;
+            showToast(succMsg);
+            setTimeout(() => {
+              closeModal("folderUploadModal");
+              if (currentView === "files") loadFiles(currentParentId);
+              if (currentView === "transfers") loadUploadTransfers();
+            }, 1200);
+          } else if (data.status === "failed" || data.status === "cancelled") {
+            clearInterval(folderUploadPollTimer);
+            folderUploadPollTimer = null;
+            isBrowserFolderUploading = false;
+            document.getElementById("folderUploadStatusLabel").innerText = (data.status === "cancelled") ? "⏹️ 上传已被取消" : ("❌ 上传失败: " + (data.stageText || "未知错误"));
+            document.getElementById("startFolderUploadBtn").disabled = false;
+          }
+        } catch (e) {
+          console.error("Poll folder upload status failed:", e);
+        }
+      }, 800);
+    }
+
+    function switchToTransfersAfterUploadStart() {
+      closeModal("folderUploadModal");
+      switchView("transfers");
+      switchTransferType("upload");
+    }
+
     // Modal helpers
     function openModal(id) { document.getElementById(id).style.display = "flex"; }
     function closeModal(id) { document.getElementById(id).style.display = "none"; }
@@ -8113,23 +9457,33 @@ function escapeHtml(str) {
     loadStrmView(true);
     loadLogs(true);
 
-    // Polling timer for active downloads & STRM sync tasks
+    // Polling timer for active downloads, uploads & STRM sync tasks
     setInterval(() => {
       if (currentView === 'transfers') {
-        loadTransfers();
+        if (currentTransferType === 'download') {
+          loadTransfers();
+        } else {
+          loadUploadTransfers();
+        }
       } else {
-        // background poll badge
-        fetch("/api/transfers").then(r => r.json()).then(tasks => {
-          localDownloadsMap = tasks;
-          const activeList = Object.values(tasks).filter(t => t.status === "downloading" || t.status === "pending" || t.status === "getting_url");
+        // background poll badge (both downloads and uploads)
+        Promise.all([
+          fetch("/api/transfers").then(r => r.json()).catch(() => ({})),
+          fetch("/api/transfers/uploads").then(r => r.json()).catch(() => ({}))
+        ]).then(([dlTasks, upTasks]) => {
+          localDownloadsMap = dlTasks || {};
+          uploadTasksMap = upTasks || {};
+          const activeDl = Object.values(localDownloadsMap).filter(t => t.status === "downloading" || t.status === "pending" || t.status === "getting_url").length;
+          const activeUp = Object.values(uploadTasksMap).filter(t => t.status === "running" || t.status === "pending" || t.status === "scanning" || t.status === "uploading").length;
+          const totalActive = activeDl + activeUp;
+
           const badge = document.getElementById("activeDlBadge");
           const mDlBadge = document.getElementById("mobileActiveDlBadge");
-          if (activeList.length > 0) {
-            badge.style.display = "inline-block";
-            badge.innerText = activeList.length;
-            if (mDlBadge) { mDlBadge.style.display = "inline-block"; mDlBadge.innerText = activeList.length; }
+          if (totalActive > 0) {
+            if (badge) { badge.style.display = "inline-flex"; badge.innerText = totalActive; }
+            if (mDlBadge) { mDlBadge.style.display = "inline-flex"; mDlBadge.innerText = totalActive; }
           } else {
-            badge.style.display = "none";
+            if (badge) badge.style.display = "none";
             if (mDlBadge) mDlBadge.style.display = "none";
           }
         }).catch(()=>{});
@@ -8152,17 +9506,24 @@ function escapeHtml(str) {
 
     // Desktop Keyboard Ergonomics
     window.addEventListener('keydown', (e) => {
-      // Esc to close any open modal
+      // Esc to close the top-most open modal
       if (e.key === 'Escape') {
-        const modals = document.querySelectorAll('.modal-backdrop');
-        let closedAny = false;
-        modals.forEach(m => {
-          if (m.style.display === 'flex' || window.getComputedStyle(m).display === 'flex') {
-            m.style.display = 'none';
-            closedAny = true;
-          }
+        const openModals = Array.from(document.querySelectorAll('.modal-backdrop')).filter(m => {
+          return m.style.display === 'flex' || window.getComputedStyle(m).display === 'flex';
         });
-        if (closedAny) e.preventDefault();
+        if (openModals.length > 0) {
+          openModals.sort((a, b) => {
+            const za = parseInt(window.getComputedStyle(a).zIndex || '0', 10) || 0;
+            const zb = parseInt(window.getComputedStyle(b).zIndex || '0', 10) || 0;
+            return zb - za;
+          });
+          const topModal = openModals[0];
+          topModal.style.display = 'none';
+          if (topModal.id === 'loginModal' && typeof closeLoginModal === 'function') {
+            closeLoginModal();
+          }
+          e.preventDefault();
+        }
       }
       // Ctrl+A / Cmd+A to select all files when browsing files
       if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
@@ -8297,24 +9658,30 @@ class RequestHandler(BaseHTTPRequestHandler):
     app: GuangyapanApp = None
 
     def _send_json(self, data, code=200):
-        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _send_html(self, html_str, code=200):
-        body = html_str.encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            body = html_str.encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _handle_strm_stream(self, path: str, query: dict, is_head: bool = False):
         """Handle STRM playback requests via 302 redirect (default) or HTTP range proxy."""
@@ -8752,14 +10119,24 @@ class RequestHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send_json({"error": str(e), "folders": [], "files": []}, 500)
 
-        elif path == "/api/upload/status":
+        elif path in ("/api/upload/status", "/api/upload/folder/status"):
             upload_id = query.get("uploadId", [""])[0].strip()
+            task = None
             with self.app.upload_lock:
                 task = self.app.upload_tasks.get(upload_id)
+            if not task:
+                with self.app.folder_upload_lock:
+                    ft = self.app.folder_upload_tasks.get(upload_id)
+                    if ft:
+                        task = {k: v for k, v in ft.items() if not k.startswith("_")}
             if task:
                 self._send_json(task)
             else:
                 self._send_json({"error": "Upload task not found"}, 404)
+
+        elif path in ("/api/transfers/uploads", "/api/upload/tasks"):
+            all_uploads = self.app.get_all_upload_tasks()
+            self._send_json(all_uploads)
 
         elif path == "/api/fs/check-file":
             target_dir = query.get("targetDir", [""])[0].strip() or self.app.download_dir
@@ -9165,12 +10542,23 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/create-folder":
             body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            name = (body.get("name") or body.get("dirName") or "").strip()
+            parent_id = (body.get("parentId") or "").strip()
+            if not name:
+                self._send_json({"code": 400, "msg": "文件夹名称不能为空", "error": "文件夹名称不能为空"}, 400)
+                return
             try:
-                res = self.app.client.create_folder(body["name"], body.get("parentId", ""))
-                self.app.log("INFO", "system", f"📁 创建网盘新文件夹: {body.get('name', '')}")
+                res = self.app.client.create_folder(name, parent_id)
+                code = res.get("code")
+                msg = res.get("msg") or "success"
+                if code == 0 or msg == "success":
+                    self.app.log("SUCCESS", "system", f"📁 创建网盘新文件夹成功: {name}")
+                else:
+                    self.app.log("WARN", "system", f"⚠️ 创建网盘新文件夹未成功: {name} ({msg})")
                 self._send_json(res)
             except Exception as e:
-                self._send_json({"error": str(e)}, 500)
+                self.app.log("ERROR", "system", f"❌ 创建网盘新文件夹异常: {name}", f"错误: {e}")
+                self._send_json({"code": 500, "error": str(e), "msg": str(e)}, 500)
 
         elif path == "/api/delete-file":
             body = json.loads(self.rfile.read(content_length).decode("utf-8"))
@@ -9217,6 +10605,181 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"status": "success", "result": res})
             except Exception as e:
                 self._send_json({"error": str(e)}, 500)
+
+        elif path == "/api/upload/folder":
+            try:
+                body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                nas_path = body.get("nasPath", "").strip()
+                parent_id = body.get("parentId", "").strip()
+                if not nas_path:
+                    self._send_json({"error": "请提供 NAS 文件夹路径 (nasPath)"}, 400)
+                    return
+                if not os.path.exists(nas_path):
+                    self._send_json({"error": f"NAS 路径不存在: {nas_path}"}, 400)
+                    return
+                if not os.path.isdir(nas_path):
+                    self._send_json({"error": f"所选路径不是文件夹: {nas_path}"}, 400)
+                    return
+                upload_id = self.app.start_nas_folder_upload(nas_path, target_parent_id=parent_id)
+                self._send_json({"status": "started", "uploadId": upload_id})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            return
+
+        elif path == "/api/upload/folder/init-browser":
+            try:
+                body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                folder_name = body.get("folderName", "").strip()
+                parent_id = body.get("parentId", "").strip()
+                total_files = int(body.get("totalFiles", 0))
+                total_bytes = int(body.get("totalBytes", 0))
+                directories = body.get("directories", [])
+                files_meta = body.get("files", [])
+                res = self.app.init_browser_folder_upload(folder_name, parent_id, total_files, total_bytes, directories, files_meta)
+                self._send_json(res)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            return
+
+        elif path == "/api/upload/folder/browser-file":
+            content_type = self.headers.get("Content-Type", "")
+            if "multipart/form-data" not in content_type:
+                self._send_json({"error": "Expected multipart/form-data"}, 400)
+                return
+
+            try:
+                boundary_str = content_type.split("boundary=")[1].strip()
+                boundary_bytes = boundary_str.encode("utf-8")
+            except Exception:
+                self._send_json({"error": "Invalid multipart boundary"}, 400)
+                return
+
+            dest_dir = self.app.download_dir or "/vol1/1000"
+            if not os.path.exists(dest_dir):
+                try:
+                    os.makedirs(dest_dir, exist_ok=True)
+                except Exception:
+                    dest_dir = "/tmp"
+
+            temp_path = os.path.join(dest_dir, f".upload_tmp_{int(time.time())}_{uuid.uuid4().hex[:6]}")
+            task = None
+            filename = ""
+            rel_path = ""
+            try:
+                os.makedirs(dest_dir, exist_ok=True)
+                with open(temp_path, "wb") as f_out:
+                    reader = MultipartStreamReader(self.rfile, content_length, boundary_bytes)
+                    fields, filename = reader.parse(f_out)
+
+                upload_id = fields.get("uploadId", "").strip()
+                rel_path = fields.get("relPath", "").strip()
+                parent_id = fields.get("parentId", "").strip()
+
+                with self.app.folder_upload_lock:
+                    task = self.app.folder_upload_tasks.get(upload_id)
+
+                if not task:
+                    if os.path.exists(temp_path):
+                        try: os.remove(temp_path)
+                        except Exception: pass
+                    self._send_json({"error": "Upload task expired or not found"}, 404)
+                    return
+
+                if task.get("_cancel_event") and task["_cancel_event"].is_set():
+                    if os.path.exists(temp_path):
+                        try: os.remove(temp_path)
+                        except Exception: pass
+                    self._send_json({"error": "Upload task cancelled"}, 400)
+                    return
+
+                file_size = os.path.getsize(temp_path) if os.path.exists(temp_path) else 0
+
+                # Upload to Guangyapan
+                def _file_prog(pinfo):
+                    with self.app.folder_upload_lock:
+                        task["currentFile"] = rel_path or filename
+                        task["currentFilePercent"] = pinfo.get("percent", 0)
+
+                self.app.client.upload_file(temp_path, parent_id=parent_id, custom_name=filename, progress_callback=_file_prog)
+
+                # Immediately delete temporary staging file!
+                if os.path.exists(temp_path):
+                    try: os.remove(temp_path)
+                    except Exception: pass
+
+                # Update task statistics
+                with self.app.folder_upload_lock:
+                    task["finishedFiles"] += 1
+                    task["finishedBytes"] += file_size
+                    now = time.time()
+                    dt = now - task["_last_speed_check"][0]
+                    if dt >= 1.0:
+                        db = task["finishedBytes"] - task["_last_speed_check"][1]
+                        spd = max(0.0, db / dt)
+                        task["speed"] = format_speed(spd)
+                        task["speedBytes"] = spd
+                        task["_last_speed_check"] = [now, task["finishedBytes"]]
+
+                    if task["totalBytes"] > 0:
+                        task["overallPercent"] = min(100, int((task["finishedBytes"] / task["totalBytes"]) * 100))
+                    task["stageText"] = f"正在传输: {task['finishedFiles']}/{task['totalFiles']} (已完成: {format_size(task['finishedBytes'])}/{format_size(task['totalBytes'])})"
+
+                self._send_json({"ok": True, "fileName": filename, "relPath": rel_path})
+            except Exception as e:
+                if os.path.exists(temp_path):
+                    try: os.remove(temp_path)
+                    except Exception: pass
+                if task:
+                    with self.app.folder_upload_lock:
+                        task["failedFiles"] += 1
+                        task["errors"].append({"file": rel_path or filename, "error": str(e)})
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        elif path == "/api/upload/folder/finish-browser":
+            try:
+                body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                upload_id = body.get("uploadId", "").strip()
+                with self.app.folder_upload_lock:
+                    if upload_id in self.app.folder_upload_tasks:
+                        t = self.app.folder_upload_tasks[upload_id]
+                        t["finishTime"] = time.time()
+                        t["speed"] = "0 KB/s"
+                        if t.get("_cancel_event") and t["_cancel_event"].is_set():
+                            t["status"] = "cancelled"
+                            t["stageText"] = "任务已被用户取消"
+                        elif t["failedFiles"] > 0:
+                            t["status"] = "partially_failed"
+                            t["stageText"] = f"上传完成，共 {t['finishedFiles']} 个完成（跳过 {t['skippedFiles']} 个），{t['failedFiles']} 个失败"
+                        else:
+                            t["status"] = "completed"
+                            t["overallPercent"] = 100
+                            t["stageText"] = f"✅ 本机文件夹全部上传成功（共 {t['finishedFiles']} 个文件，跳过 {t['skippedFiles']} 个）"
+                        self.app.log("SUCCESS", "system", f"✅ 本机文件夹上传完成: {t.get('name')}")
+                        self._send_json({"ok": True, "status": t["status"]})
+                        return
+                self._send_json({"error": "Task not found"}, 404)
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            return
+
+        elif path in ("/api/upload/cancel", "/api/transfers/upload-cancel"):
+            try:
+                body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                upload_id = body.get("uploadId", "").strip()
+                ok = self.app.cancel_upload_task(upload_id)
+                self._send_json({"ok": ok})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            return
+
+        elif path in ("/api/upload/clear-completed", "/api/transfers/upload-clear"):
+            try:
+                cleared = self.app.clear_completed_upload_tasks()
+                self._send_json({"cleared": cleared})
+            except Exception as e:
+                self._send_json({"error": str(e)}, 500)
+            return
 
         elif path == "/api/upload":
             content_type = self.headers.get("Content-Type", "")
